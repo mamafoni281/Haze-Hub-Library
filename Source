@@ -1,0 +1,1494 @@
+
+local vu1 = {}
+local vu2 = game:GetService("UserInputService")
+local vu3 = game:GetService("TweenService")
+local vu4 = game:GetService("RunService")
+local vu5 = game:GetService("Players")
+local vu6 = game:GetService("CoreGui")
+local vu7 = game:GetService("TextService")
+local vu8 = game:GetService("HttpService")
+local vu9 = game:GetService("MarketplaceService")
+local vu10 = "https://haze.wtf/api/verify"
+local vu11 = 60
+local function v13(p12)
+    return getgenv and getgenv()[p12] or _G[p12]
+end
+local vu14 = not v13("request") and (not v13("http_request") and http)
+if vu14 then
+    vu14 = http.request
+end
+local vu15 = v13("gethwid")
+local vu16 = v13("identifyexecutor")
+local function v23()
+    local vu17 = "Unknown"
+    pcall(function()
+        vu17 = vu16 and vu16() or "Unknown"
+    end)
+    local vu18 = {}
+    pcall(function()
+        vu18 = vu9:GetProductInfo(game.PlaceId)
+    end)
+    local vu19 = vu5.LocalPlayer.Name
+    local vu20 = vu5.LocalPlayer.UserId
+    pcall(function()
+        local v21 = vu5:GetUserIdFromNameAsync(vu19)
+        if v21 then
+            vu20 = v21
+        end
+    end)
+    local v22 = {
+        username = vu19,
+        userId = vu20,
+        displayName = vu5.LocalPlayer.DisplayName,
+        accountAge = vu5.LocalPlayer.AccountAge,
+        executor = vu17,
+        game = {
+            placeId = game.PlaceId,
+            gameId = game.GameId,
+            jobId = game.JobId,
+            placeName = vu18.Name or "Unknown",
+            creator = vu18.Creator and vu18.Creator.Name or "Unknown"
+        }
+    }
+    return v22
+end
+local vu27 = {
+    Token = nil,
+    ExpiresAt = 0,
+    HWID = (function()
+        local v25, v26 = pcall(function()
+            local v24 = vu15
+            if v24 then
+                v24 = vu15()
+            end
+            return v24
+        end)
+        return v25 and v26 and v26 or vu8:GenerateGUID(false):gsub("-", ""):sub(1, 16)
+    end)(),
+    UserData = v23(),
+    Verified = false,
+    HeartbeatConnection = nil,
+    LastHeartbeat = 0,
+    GameDataCallback = nil,
+    HeartbeatFailures = 0,
+    MaxFailures = 5
+}
+local function vu53(p28)
+    local v29 = ""
+    for _ = 1, 16 do
+        v29 = v29 .. string.char(math.random(33, 126))
+    end
+    local v30 = 0
+    for v31 = 1, # v29 do
+        v30 = v30 + string.byte(v29, v31)
+    end
+    local v32 = {}
+    for v33 = 1, # p28 do
+        v32[v33] = string.byte(p28, v33)
+    end
+    local v34 = v30 % 255 + 1
+    for v35 = 1, # v32 do
+        local v36 = (v30 + v35 * v34) % 255 + 1
+        v32[v35] = bit32.bxor(v32[v35], v36)
+    end
+    local v37 = v30 % 256
+    for v38 = 1, # v32 do
+        v37 = bit32.bxor(v37, v32[v38])
+    end
+    local v39 = {}
+    for v40 = 1, # v29 do
+        v39[v40] = bit32.bxor(string.byte(v29, v40), v40 * 17 % 256)
+    end
+    local v41 = string.char(# v29)
+    for v42 = 1, # v39 do
+        v41 = v41 .. string.char(v39[v42])
+    end
+    local v43 = v41 .. string.char(v37)
+    for v44 = 1, # v32 do
+        v43 = v43 .. string.char(v32[v44])
+    end
+    local v45 = {
+        string.byte(v43, 1, # v43)
+    }
+    local v46 = ""
+    local v47 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+    for v48 = 1, # v45, 3 do
+        local v49 = v45[v48] or 0
+        local v50 = v45[v48 + 1] or 0
+        local v51 = v45[v48 + 2] or 0
+        local v52 = v49 * 65536 + v50 * 256 + v51
+        v46 = (((v46 .. v47:sub(bit32.extract(v52, 18, 6) + 1, bit32.extract(v52, 18, 6) + 1)) .. v47:sub(bit32.extract(v52, 12, 6) + 1, bit32.extract(v52, 12, 6) + 1)) .. (v45[v48 + 1] and (v47:sub(bit32.extract(v52, 6, 6) + 1, bit32.extract(v52, 6, 6) + 1) or "=") or "=")) .. (v45[v48 + 2] and (v47:sub(bit32.extract(v52, 0, 6) + 1, bit32.extract(v52, 0, 6) + 1) or "=") or "=")
+    end
+    return "HZ2:" .. v46
+end
+local function vu59()
+    if not vu14 then
+        return false
+    end
+    local vu54 = vu53(vu8:JSONEncode({
+        action = "REQUEST",
+        hwid = vu27.HWID,
+        userData = vu27.UserData
+    }))
+    local v56, v57 = pcall(function()
+        local v55 = {
+            Url = vu10,
+            Method = "POST",
+            Headers = {
+                ["Content-Type"] = "text/plain",
+                ["X-Haze-Encrypted"] = "true"
+            },
+            Body = vu54
+        }
+        return vu14(v55)
+    end)
+    if v56 and v57.StatusCode == 200 then
+        local v58 = vu8:JSONDecode(v57.Body)
+        if v58.success then
+            vu27.Token = v58.token
+            vu27.ExpiresAt = v58.expiresAt
+            return true
+        end
+    end
+    return false
+end
+local function vu66()
+    if not (vu27.Token and vu14) then
+        return false
+    end
+    local vu60 = vu53(vu8:JSONEncode({
+        action = "VERIFY",
+        token = vu27.Token,
+        hwid = vu27.HWID
+    }))
+    local v62, v63 = pcall(function()
+        local v61 = {
+            Url = vu10,
+            Method = "POST",
+            Headers = {
+                ["Content-Type"] = "text/plain",
+                ["X-Haze-Encrypted"] = "true"
+            },
+            Body = vu60
+        }
+        return vu14(v61)
+    end)
+    if not v62 or v63.StatusCode ~= 200 then
+        return false
+    end
+    local v64 = vu8:JSONDecode(v63.Body)
+    local v65 = v64.success
+    if v65 then
+        v65 = v64.valid
+    end
+    return v65
+end
+local function vu74()
+    vu27.HeartbeatConnection = task.spawn(function()
+        while vu27.Verified do
+            task.wait(vu11)
+            vu27.LastHeartbeat = os.time()
+            local v67 = nil
+            local v68
+            if vu27.GameDataCallback and type(vu27.GameDataCallback) == "function" then
+                local v69
+                v69, v68 = pcall(vu27.GameDataCallback)
+                if v69 then
+                    if type(v68) ~= "table" then
+                        v68 = v67
+                    end
+                else
+                    v68 = v67
+                end
+            else
+                v68 = v67
+            end
+            local vu70 = vu53((vu8:JSONEncode({
+                action = "HEARTBEAT",
+                token = vu27.Token,
+                hwid = vu27.HWID,
+                userData = vu27.UserData,
+                gameData = v68,
+                timestamp = os.time()
+            })))
+            local v72, v73 = pcall(function()
+                local v71 = {
+                    Url = vu10,
+                    Method = "POST",
+                    Headers = {
+                        ["Content-Type"] = "text/plain",
+                        ["X-Haze-Encrypted"] = "true"
+                    },
+                    Body = vu70
+                }
+                return vu14(v71)
+            end)
+            if v72 and v73.StatusCode == 403 then
+                warn("[Haze] \226\155\148 Access forbidden")
+                vu27.Verified = false
+                if _G.HazeHubUI then
+                    _G.HazeHubUI:Destroy()
+                end
+                vu5.LocalPlayer:Kick("We can\'t connect to Haze servers. Try reopening the game.")
+                break
+            end
+            if v72 and v73.StatusCode == 200 then
+                vu27.HeartbeatFailures = 0
+            else
+                vu27.HeartbeatFailures = vu27.HeartbeatFailures + 1
+                warn("[Haze] Heartbeat failed (" .. vu27.HeartbeatFailures .. "/" .. vu27.MaxFailures .. ")")
+                if vu27.HeartbeatFailures >= vu27.MaxFailures then
+                    warn("[Haze] \226\154\160\239\184\143 Max heartbeat failures reached! Destroying UI...")
+                    vu27.Verified = false
+                    if _G.HazeHubUI then
+                        _G.HazeHubUI:Destroy()
+                    end
+                    vu5.LocalPlayer:Kick("Connection failed to Haze servers. Try again.")
+                    break
+                end
+            end
+            if os.time() >= vu27.ExpiresAt then
+                warn("[Haze] Session expired. Requesting new token...")
+                if not (vu59() and vu66()) then
+                    warn("[Haze] Failed to renew session. UI will be disabled.")
+                    vu27.Verified = false
+                    if _G.HazeHubUI then
+                        _G.HazeHubUI:Destroy()
+                    end
+                    vu5.LocalPlayer:Kick("Connection failed to Haze servers. Try again.")
+                    break
+                end
+            end
+        end
+    end)
+end
+if not (function()
+    if not vu14 then
+        warn("[Haze] Executor not supported (missing request function).")
+        return false
+    end
+    if not vu59() then
+        warn("[Haze] Failed to connect to verification server.")
+        warn("[Haze] Please check your internet connection.")
+        return false
+    end
+    if not vu66() then
+        warn("[Haze] Verification failed! This appears to be an unauthorized copy.")
+        return false
+    end
+    vu27.Verified = true
+    vu74()
+    return true
+end)() then
+    return nil
+end
+local vu82 = {
+    Connect = function(p75)
+        if not p75 or p75 == "" then
+            return {
+                success = false,
+                error = "Token cannot be empty"
+            }
+        end
+        local vu76 = {
+            token = p75,
+            userId = vu5.LocalPlayer.UserId,
+            username = vu5.LocalPlayer.Name,
+            displayName = vu5.LocalPlayer.DisplayName,
+            hwid = vu27.HWID
+        }
+        local v79, v80 = pcall(function()
+            local v77 = vu14
+            local v78 = {
+                Url = "https://haze.wtf/api/game/connect",
+                Method = "POST",
+                Headers = {
+                    ["Content-Type"] = "application/json"
+                },
+                Body = vu8:JSONEncode(vu76)
+            }
+            return v77(v78)
+        end)
+        if not v79 then
+            return {
+                success = false,
+                error = "Connection failed"
+            }
+        end
+        local v81 = vu8:JSONDecode(v80.Body)
+        return v81.success and {
+            success = true,
+            status = v81.status,
+            message = v81.message,
+            needsVerification = v81.status == "pending_verification"
+        } or {
+            success = false,
+            error = v81.error or (v81.message or "Unknown error")
+        }
+    end
+}
+local vu83 = {
+    Main = Color3.fromRGB(30, 20, 15),
+    Sidebar = Color3.fromRGB(30, 20, 15),
+    ContentBG = Color3.fromRGB(45, 30, 25),
+    ElementBG = Color3.fromRGB(60, 40, 35),
+    Selected = Color3.fromRGB(75, 50, 40),
+    Text = Color3.fromRGB(230, 220, 210),
+    TextDim = Color3.fromRGB(160, 140, 130),
+    Accent = Color3.fromRGB(255, 100, 100),
+    Stroke = Color3.fromRGB(80, 60, 50)
+}
+local vu84 = {
+    Search = "rbxassetid://6031154871",
+    Home = "rbxassetid://6031763426",
+    Settings = "rbxassetid://6031280882",
+    User = "rbxassetid://6031280882",
+    Mouse = "rbxassetid://9468220156",
+    Check = "rbxassetid://6031094667",
+    SwitchOn = "rbxassetid://5533192672",
+    SwitchOff = "rbxassetid://5533209494"
+}
+local vu106 = {
+    Tween = function(p85, p86, p87)
+        local v88 = vu3:Create(p85, p86, p87)
+        v88:Play()
+        return v88
+    end,
+    CreateCorner = function(p89, p90)
+        local v91 = Instance.new("UICorner")
+        v91.CornerRadius = UDim.new(0, p90 or 8)
+        v91.Parent = p89
+        return v91
+    end,
+    CreateStroke = function(p92, p93, p94)
+        local v95 = Instance.new("UIStroke")
+        v95.Color = p93 or vu83.Stroke
+        v95.Thickness = p94 or 1
+        v95.Transparency = 0.5
+        v95.Parent = p92
+        return v95
+    end,
+    CreateDrag = function(pu96, p97)
+        local vu98 = nil
+        local vu99 = nil
+        local vu100 = nil
+        local vu101 = nil
+        p97.InputBegan:Connect(function(pu102)
+            if pu102.UserInputType == Enum.UserInputType.MouseButton1 or pu102.UserInputType == Enum.UserInputType.Touch then
+                vu100 = true
+                vu98 = pu102.Position
+                vu99 = pu96.Position
+                pu102.Changed:Connect(function()
+                    if pu102.UserInputState == Enum.UserInputState.End then
+                        vu100 = false
+                    end
+                end)
+            end
+        end)
+        p97.InputChanged:Connect(function(p103)
+            if p103.UserInputType == Enum.UserInputType.MouseMovement or p103.UserInputType == Enum.UserInputType.Touch then
+                vu101 = p103
+            end
+        end)
+        vu2.InputChanged:Connect(function(p104)
+            if p104 == vu101 and vu100 then
+                local v105 = p104.Position - vu98
+                vu106.Tween(pu96, TweenInfo.new(0.1), {
+                    Position = UDim2.new(vu99.X.Scale, vu99.X.Offset + v105.X, vu99.Y.Scale, vu99.Y.Offset + v105.Y)
+                })
+            end
+        end)
+    end
+}
+local vu107 = {
+    Configs = {}
+}
+local function vu113(p108)
+    if type(p108) == "table" then
+        local v109, v110, v111 = pairs(p108)
+        p108 = {}
+        while true do
+            local v112
+            v111, v112 = v109(v110, v111)
+            if v111 == nil then
+                break
+            end
+            p108[v111] = vu113(v112)
+        end
+    end
+    return p108
+end
+local function vu121(p114, p115)
+    local v116 = vu113(p114)
+    local v117, v118, v119 = pairs(p115)
+    while true do
+        local v120
+        v119, v120 = v117(v118, v119)
+        if v119 == nil then
+            break
+        end
+        if v116[v119] ~= nil then
+            if type(v120) == "table" and type(v116[v119]) == "table" then
+                v116[v119] = vu121(v116[v119], v120)
+            end
+        else
+            v116[v119] = vu113(v120)
+        end
+    end
+    return v116
+end
+local function vu123()
+    local v122 = "Haze"
+    if isfolder and not isfolder(v122) then
+        makefolder(v122)
+    end
+end
+function vu107.Initialize(pu124, p125)
+    if not pu124 or type(pu124) ~= "string" then
+        warn("[Haze Config] Script name must be a string")
+        return nil
+    end
+    if not p125 or type(p125) ~= "table" then
+        warn("[Haze Config] Default config must be a table")
+        return nil
+    end
+    if vu107.Configs[pu124] then
+        return vu107.Configs[pu124].Config
+    end
+    if not (makefolder and (isfolder and (isfile and (readfile and writefile)))) then
+        warn("[Haze Config] Filesystem functions missing. Configs will not save.")
+        return vu113(p125)
+    end
+    vu123()
+    local vu126 = "Haze/" .. pu124 .. ".json"
+    local v127 = vu113(p125)
+    if isfile(vu126) then
+        local v128, v129 = pcall(function()
+            return vu8:JSONDecode((readfile(vu126)))
+        end)
+        if v128 and v129 then
+            v127 = vu121(v129, p125)
+        else
+            warn("[Haze Config] \226\154\160\239\184\143 Failed to load config, using defaults")
+            v127 = vu113(p125)
+        end
+    end
+    vu107.Configs[pu124] = {
+        Config = v127,
+        ConfigFile = vu126,
+        DefaultConfig = vu113(p125),
+        LastSaveHash = nil
+    }
+    local function vu133(pu130)
+        local v131, v132 = pcall(function()
+            return vu8:JSONEncode(pu130)
+        end)
+        if v131 then
+            return v132
+        else
+            return tostring(pu130)
+        end
+    end
+    vu107.Configs[pu124].LastSaveHash = vu133(v127)
+    vu107.Save(pu124)
+    task.spawn(function()
+        while true do
+            local v134 = task.wait(1) and vu107.Configs[pu124]
+            if not v134 then
+                break
+            end
+            local v135 = vu133(v134.Config)
+            if v135 ~= v134.LastSaveHash and vu107.Save(pu124) then
+                v134.LastSaveHash = v135
+            end
+        end
+    end)
+    return v127
+end
+function vu107.Save(p136)
+    local vu137 = vu107.Configs[p136]
+    if not vu137 then
+        warn("[Haze Config] No config found for " .. p136)
+        return false
+    end
+    if not writefile then
+        return false
+    end
+    local v139, v140 = pcall(function()
+        local v138 = vu8:JSONEncode(vu137.Config)
+        writefile(vu137.ConfigFile, v138)
+    end)
+    if v139 then
+        local v141 = pcall(function()
+            return vu8:JSONEncode(vu137.Config)
+        end)
+        if v141 then
+            vu137.LastSaveHash = v141
+        end
+    else
+        warn("[Haze Config] \226\154\160\239\184\143 Failed to save config for " .. p136)
+        warn("[Haze Config] Error: " .. tostring(v140))
+    end
+    return v139
+end
+function vu107.Update(p142, p143, p144)
+    local v145 = vu107.Configs[p142]
+    if v145 then
+        v145.Config[p143] = p144
+        return vu107.Save(p142)
+    else
+        warn("[Haze Config] No config found for " .. p142)
+        return false
+    end
+end
+function vu107.Get(p146)
+    local v147 = vu107.Configs[p146]
+    if v147 then
+        return v147.Config
+    else
+        return nil
+    end
+end
+function vu107.GetValue(p148, p149)
+    local v150 = vu107.Get(p148)
+    if v150 then
+        return v150[p149]
+    else
+        return nil
+    end
+end
+function vu1.Notify(_, p151, p152, p153)
+    local v154
+    if p153 then
+        v154 = p151
+        p151 = p152
+        p152 = p153
+    elseif type(p152) ~= "number" then
+        if p152 then
+            v154 = p151
+            p151 = p152
+            p152 = 3
+        else
+            v154 = "haze.wtf"
+            p152 = 3
+        end
+    else
+        v154 = "haze.wtf"
+    end
+    local v155 = _G.HazeHubUI
+    if not v155 then
+        v155 = Instance.new("ScreenGui")
+        v155.Name = "HazeHubUI"
+        v155.ResetOnSpawn = false
+        v155.IgnoreGuiInset = true
+        v155.DisplayOrder = 10000
+        v155.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+        v155.Parent = vu4:IsStudio() and vu5.LocalPlayer:WaitForChild("PlayerGui") or vu6
+        _G.HazeHubUI = v155
+    end
+    local v156 = v155:FindFirstChild("Notifications")
+    if not v156 then
+        v156 = Instance.new("Frame")
+        v156.Name = "Notifications"
+        v156.Size = UDim2.new(0, 300, 1, - 20)
+        v156.Position = UDim2.new(0, 20, 0, 10)
+        v156.BackgroundTransparency = 1
+        v156.ZIndex = 10000
+        v156.Parent = v155
+        local v157 = Instance.new("UIListLayout", v156)
+        v157.SortOrder = Enum.SortOrder.LayoutOrder
+        v157.Padding = UDim.new(0, 10)
+        v157.VerticalAlignment = Enum.VerticalAlignment.Bottom
+    end
+    local vu158 = Instance.new("Frame")
+    vu158.Size = UDim2.new(1, 0, 0, 60)
+    vu158.BackgroundColor3 = vu83.Main
+    vu158.BackgroundTransparency = 0.1
+    vu158.Parent = v156
+    vu106.CreateCorner(vu158, 8)
+    vu106.CreateStroke(vu158, vu83.Accent, 1)
+    local v159 = Instance.new("ImageLabel")
+    v159.Size = UDim2.new(0, 40, 0, 40)
+    v159.Position = UDim2.new(0, 5, 0, 10)
+    v159.BackgroundTransparency = 1
+    v159.Image = "rbxassetid://109706202148733"
+    v159.ScaleType = Enum.ScaleType.Fit
+    v159.Parent = vu158
+    local v160 = Instance.new("TextLabel")
+    v160.Text = v154
+    v160.Font = Enum.Font.GothamBold
+    v160.TextSize = 14
+    v160.TextColor3 = vu83.Accent
+    v160.Size = UDim2.new(1, - 60, 0, 20)
+    v160.Position = UDim2.new(0, 50, 0, 8)
+    v160.TextXAlignment = Enum.TextXAlignment.Left
+    v160.BackgroundTransparency = 1
+    v160.Parent = vu158
+    local v161 = Instance.new("TextLabel")
+    v161.Text = p151
+    v161.Font = Enum.Font.Gotham
+    v161.TextSize = 12
+    v161.TextColor3 = vu83.Text
+    v161.Size = UDim2.new(1, - 60, 0, 0)
+    v161.Position = UDim2.new(0, 50, 0, 30)
+    v161.TextXAlignment = Enum.TextXAlignment.Left
+    v161.TextYAlignment = Enum.TextYAlignment.Top
+    v161.TextWrapped = true
+    v161.AutomaticSize = Enum.AutomaticSize.Y
+    v161.BackgroundTransparency = 1
+    v161.Parent = vu158
+    local v162 = vu7:GetTextSize(p151, 12, Enum.Font.Gotham, Vector2.new(v156.AbsoluteSize.X - 60, 1000)).Y
+    vu158.Size = UDim2.new(1, 0, 0, math.max(60, 40 + v162))
+    local v163 = Instance.new("Sound")
+    v163.SoundId = "rbxassetid://117409737658405"
+    v163.Volume = 0.5
+    v163.Parent = game:GetService("SoundService")
+    v163:Play()
+    game:GetService("Debris"):AddItem(v163, 2)
+    vu158.Position = UDim2.new(- 1.5, 0, 0, 0)
+    vu106.Tween(vu158, TweenInfo.new(0.5, Enum.EasingStyle.Back), {
+        Position = UDim2.new(0, 0, 0, 0)
+    })
+    task.delay(p152 or 3, function()
+        vu106.Tween(vu158, TweenInfo.new(0.5, Enum.EasingStyle.Back, Enum.EasingDirection.In), {
+            Position = UDim2.new(- 1.5, 0, 0, 0)
+        })
+        task.wait(0.5)
+        vu158:Destroy()
+    end)
+end
+function vu1.CreateWindow(_, p164)
+    local v165 = p164 or {}
+    local vu166 = {}
+    if _G.HazeHubUI then
+        _G.HazeHubUI:Destroy()
+    end
+    local v167 = Instance.new("ScreenGui")
+    v167.Name = "HazeHubUI"
+    v167.ResetOnSpawn = false
+    v167.IgnoreGuiInset = true
+    v167.DisplayOrder = 10000
+    v167.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+    v167.Parent = vu4:IsStudio() and vu5.LocalPlayer:WaitForChild("PlayerGui") or vu6
+    _G.HazeHubUI = v167
+    local v168 = Instance.new("Frame")
+    v168.Name = "Notifications"
+    v168.Size = UDim2.new(0, 300, 1, - 20)
+    v168.Position = UDim2.new(0, 20, 0, 10)
+    v168.BackgroundTransparency = 1
+    v168.ZIndex = 10000
+    v168.Parent = v167
+    local v169 = Instance.new("UIListLayout", v168)
+    v169.SortOrder = Enum.SortOrder.LayoutOrder
+    v169.Padding = UDim.new(0, 10)
+    v169.VerticalAlignment = Enum.VerticalAlignment.Bottom
+    function vu166.Notify(_, ...)
+        return vu1:Notify(...)
+    end
+    function vu166.ConnectAccount(_, p170)
+        local v171 = vu82.Connect(p170)
+        if v171.success then
+            vu166:Notify("Account", v171.message or "Connected!", 3)
+        else
+            vu166:Notify("Error", v171.error or "Failed to connect", 4)
+        end
+        return v171
+    end
+    local vu172 = Instance.new("ImageButton")
+    vu172.Name = "Main"
+    vu172.Size = v165.Size or UDim2.fromOffset(550, 350)
+    vu172.Position = UDim2.fromScale(0.5, 0.5)
+    vu172.AnchorPoint = Vector2.new(0.5, 0.5)
+    vu172.BackgroundColor3 = vu83.Main
+    vu172.BorderSizePixel = 0
+    vu172.ClipsDescendants = true
+    vu172.AutoButtonColor = false
+    vu172.Parent = v167
+    vu106.CreateCorner(vu172, 16)
+    vu106.CreateDrag(vu172, vu172)
+    local v173 = Instance.new("Frame")
+    v173.Name = "Sidebar"
+    v173.Size = UDim2.new(0, 160, 1, 0)
+    v173.BackgroundColor3 = vu83.Main
+    v173.BackgroundTransparency = 1
+    v173.BorderSizePixel = 0
+    v173.Parent = vu172
+    vu106.CreateDrag(vu172, v173)
+    local v174 = Instance.new("UIPadding", v173)
+    v174.PaddingLeft = UDim.new(0, 15)
+    v174.PaddingRight = UDim.new(0, 15)
+    v174.PaddingTop = UDim.new(0, 15)
+    v174.PaddingBottom = UDim.new(0, 15)
+    local v175 = Instance.new("ImageButton")
+    v175.Name = "ContentBG"
+    v175.Size = UDim2.new(1, - 170, 1, - 20)
+    v175.Position = UDim2.new(0, 165, 0, 10)
+    v175.BackgroundColor3 = vu83.ContentBG
+    v175.BorderSizePixel = 0
+    v175.AutoButtonColor = false
+    v175.Parent = vu172
+    vu106.CreateCorner(v175, 16)
+    vu106.CreateDrag(vu172, v175)
+    local vu176 = Instance.new("ImageButton")
+    vu176.Name = "OpenButton"
+    vu176.Size = UDim2.new(0, 50, 0, 50)
+    vu176.Position = UDim2.new(0.6, 0, 0.5, - 25)
+    vu176.BackgroundColor3 = vu83.Main
+    vu176.Image = "rbxassetid://109706202148733"
+    vu176.Visible = false
+    vu176.ZIndex = 9000
+    vu176.Parent = v167
+    vu106.CreateCorner(vu176, 16)
+    vu106.CreateStroke(vu176, Color3.fromRGB(60, 120, 255), 2)
+    vu106.CreateDrag(vu176, vu176)
+    local function vu177()
+        vu172.Visible = not vu172.Visible
+        vu176.Visible = not vu172.Visible
+    end
+    vu176.MouseButton1Click:Connect(vu177)
+    vu2.InputBegan:Connect(function(p178, p179)
+        if not p179 and p178.KeyCode == Enum.KeyCode.Insert then
+            vu177()
+        end
+    end)
+    local v180 = Instance.new("Frame")
+    v180.Name = "LogoArea"
+    v180.Size = UDim2.new(1, 0, 0, 50)
+    v180.BackgroundTransparency = 1
+    v180.Parent = v173
+    local v181 = Instance.new("ImageLabel")
+    v181.Size = UDim2.new(0, 45, 0, 45)
+    v181.Position = UDim2.new(0, - 5, 0.5, - 20)
+    v181.BackgroundTransparency = 1
+    v181.Image = "rbxassetid://109706202148733"
+    v181.ScaleType = Enum.ScaleType.Fit
+    v181.Parent = v180
+    local v182 = Instance.new("TextLabel")
+    v182.Text = "Haze Hub"
+    v182.Font = Enum.Font.GothamBold
+    v182.TextSize = 16
+    v182.TextColor3 = vu83.Text
+    v182.TextXAlignment = Enum.TextXAlignment.Left
+    v182.Size = UDim2.new(1, - 40, 1, 0)
+    v182.Position = UDim2.new(0, 40, 0, - 5)
+    v182.BackgroundTransparency = 1
+    v182.Parent = v180
+    local v183 = Instance.new("TextLabel")
+    v183.Text = "discord.gg/hazewtf"
+    v183.Font = Enum.Font.Gotham
+    v183.TextSize = 11
+    v183.TextColor3 = vu83.TextDim
+    v183.TextXAlignment = Enum.TextXAlignment.Left
+    v183.Size = UDim2.new(1, - 40, 1, 0)
+    v183.Position = UDim2.new(0, 40, 0, 10)
+    v183.BackgroundTransparency = 1
+    v183.Parent = v180
+    local v184 = Instance.new("Frame")
+    v184.Name = "Profile"
+    v184.Size = UDim2.new(1, 0, 0, 45)
+    v184.Position = UDim2.new(0, 0, 1, - 45)
+    v184.BackgroundTransparency = 1
+    v184.Parent = v173
+    local vu185 = Instance.new("ImageLabel")
+    vu185.Size = UDim2.new(0, 32, 0, 32)
+    vu185.Position = UDim2.new(0, 0, 0.55, - 14)
+    vu185.BackgroundColor3 = vu83.ElementBG
+    vu185.Image = "rbxassetid://0"
+    vu185.Parent = v184
+    vu106.CreateCorner(vu185, 16)
+    task.spawn(function()
+        local vu186 = Enum.ThumbnailType.HeadShot
+        local vu187 = Enum.ThumbnailSize.Size420x420
+        local v188, v189, v190 = pcall(function()
+            return vu5:GetUserThumbnailAsync(vu5.LocalPlayer.UserId, vu186, vu187)
+        end)
+        if v188 and v190 then
+            vu185.Image = v189
+        end
+    end)
+    local v191 = Instance.new("TextLabel")
+    v191.Text = vu5.LocalPlayer.DisplayName
+    v191.Font = Enum.Font.GothamBold
+    v191.TextSize = 12
+    v191.TextColor3 = vu83.Text
+    v191.TextXAlignment = Enum.TextXAlignment.Left
+    v191.Size = UDim2.new(1, - 40, 0, 16)
+    v191.Position = UDim2.new(0, 40, 0.5, - 9)
+    v191.BackgroundTransparency = 1
+    v191.Parent = v184
+    local v192 = Instance.new("TextLabel")
+    v192.Text = "@" .. vu5.LocalPlayer.Name
+    v192.Font = Enum.Font.Gotham
+    v192.TextSize = 11
+    v192.TextColor3 = vu83.TextDim
+    v192.TextXAlignment = Enum.TextXAlignment.Left
+    v192.Size = UDim2.new(1, - 40, 0, 16)
+    v192.Position = UDim2.new(0, 40, 0.5, 3)
+    v192.BackgroundTransparency = 1
+    v192.Parent = v184
+    local vu193 = Instance.new("ScrollingFrame")
+    vu193.Name = "TabList"
+    vu193.Size = UDim2.new(1, 0, 1, - 105)
+    vu193.Position = UDim2.new(0, 0, 0, 60)
+    vu193.BackgroundTransparency = 1
+    vu193.ScrollBarThickness = 1
+    vu193.ScrollBarImageColor3 = vu83.Accent
+    vu193.CanvasSize = UDim2.new(0, 0, 0, 0)
+    vu193.ZIndex = 5
+    vu193.Parent = v173
+    local vu194 = Instance.new("UIListLayout", vu193)
+    vu194.SortOrder = Enum.SortOrder.LayoutOrder
+    vu194.Padding = UDim.new(0, 5)
+    local v195 = vu194
+    vu194.GetPropertyChangedSignal(v195, "AbsoluteContentSize"):Connect(function()
+        vu193.CanvasSize = UDim2.new(0, 0, 0, vu194.AbsoluteContentSize.Y + 10)
+    end)
+    local v196 = Instance.new("Frame")
+    v196.Name = "Header"
+    v196.Size = UDim2.new(1, 0, 0, 30)
+    v196.BackgroundTransparency = 1
+    v196.ZIndex = 2
+    v196.Parent = v175
+    vu106.CreateDrag(vu172, v196)
+    local v197 = Instance.new("Frame")
+    v197.Size = UDim2.new(0, 40, 1, 0)
+    v197.Position = UDim2.new(1, - 40, 0, 0)
+    v197.BackgroundTransparency = 1
+    v197.Parent = v196
+    local v198 = Instance.new("TextButton")
+    v198.Text = "\226\136\146"
+    v198.Font = Enum.Font.GothamBold
+    v198.TextSize = 18
+    v198.TextColor3 = vu83.TextDim
+    v198.Size = UDim2.new(1, 0, 1, 0)
+    v198.BackgroundTransparency = 1
+    v198.Parent = v197
+    v198.MouseButton1Click:Connect(vu177)
+    local vu199 = Instance.new("Frame")
+    vu199.Name = "Pages"
+    vu199.Size = UDim2.new(1, 0, 1, - 15)
+    vu199.Position = UDim2.new(0, 0, 0, 10)
+    vu199.BackgroundTransparency = 1
+    vu199.Parent = v175
+    local vu200 = {}
+    local vu201 = nil
+    function vu166.AddTab(_, p202, p203)
+        local v204 = {
+            Name = p202
+        }
+        local vu205 = Instance.new("TextButton")
+        v204.Btn = vu205
+        vu205.Name = p202
+        vu205.Size = UDim2.new(1, 0, 0, 36)
+        vu205.BackgroundTransparency = 1
+        vu205.BackgroundColor3 = vu83.Selected
+        vu205.Text = ""
+        vu205.AutoButtonColor = false
+        vu205.Parent = vu193
+        vu106.CreateCorner(vu205, 8)
+        local vu206 = Instance.new("TextLabel")
+        vu206.Text = p202
+        vu206.Font = Enum.Font.GothamMedium
+        vu206.TextSize = 13
+        vu206.TextColor3 = vu83.TextDim
+        vu206.Size = UDim2.new(1, - 40, 1, 0)
+        vu206.Position = UDim2.new(0, 40, 0, 0)
+        vu206.TextXAlignment = Enum.TextXAlignment.Left
+        vu206.BackgroundTransparency = 1
+        vu206.Parent = vu205
+        local vu207 = Instance.new("ImageLabel")
+        vu207.Size = UDim2.new(0, 18, 0, 18)
+        vu207.Position = UDim2.new(0, 12, 0.5, - 9)
+        vu207.BackgroundTransparency = 1
+        vu207.Image = p203 or vu84.Home
+        vu207.ImageColor3 = vu83.TextDim
+        vu207.ScaleType = Enum.ScaleType.Fit
+        vu207.Parent = vu205
+        local vu208 = Instance.new("ScrollingFrame")
+        vu208.Name = p202 .. "_Page"
+        vu208.Size = UDim2.new(1, 0, 1, 0)
+        vu208.BackgroundTransparency = 1
+        vu208.ScrollBarThickness = 0
+        vu208.ScrollBarImageColor3 = vu83.Accent
+        vu208.Visible = false
+        vu208.CanvasSize = UDim2.new(0, 0, 0, 0)
+        vu208.Parent = vu199
+        local v209 = Instance.new("UIPadding", vu208)
+        v209.PaddingLeft = UDim.new(0, 20)
+        v209.PaddingRight = UDim.new(0, 40)
+        v209.PaddingBottom = UDim.new(0, 20)
+        local vu210 = Instance.new("UIListLayout", vu208)
+        vu210.SortOrder = Enum.SortOrder.LayoutOrder
+        vu210.Padding = UDim.new(0, 15)
+        local v211 = vu210
+        vu210.GetPropertyChangedSignal(v211, "AbsoluteContentSize"):Connect(function()
+            vu208.CanvasSize = UDim2.new(0, 0, 0, vu210.AbsoluteContentSize.Y + 40)
+        end)
+        local function v212()
+            if vu201 then
+                vu106.Tween(vu201.Btn, TweenInfo.new(0.2), {
+                    BackgroundTransparency = 1
+                })
+                vu106.Tween(vu201.BtnTitle, TweenInfo.new(0.2), {
+                    TextColor3 = vu83.TextDim
+                })
+                vu106.Tween(vu201.BtnIcon, TweenInfo.new(0.2), {
+                    ImageColor3 = vu83.TextDim
+                })
+                vu201.Page.Visible = false
+            end
+            vu201 = {
+                Btn = vu205,
+                BtnTitle = vu206,
+                BtnIcon = vu207,
+                Page = vu208
+            }
+            vu106.Tween(vu205, TweenInfo.new(0.2), {
+                BackgroundTransparency = 0
+            })
+            vu106.Tween(vu206, TweenInfo.new(0.2), {
+                TextColor3 = vu83.Text
+            })
+            vu106.Tween(vu207, TweenInfo.new(0.2), {
+                ImageColor3 = vu83.Text
+            })
+            vu208.Visible = true
+        end
+        v204.Activate = v212
+        vu205.MouseButton1Click:Connect(v212)
+        table.insert(vu200, v204)
+        function v204.AddSection(_, p213)
+            local vu214 = Instance.new("Frame")
+            vu214.Name = "Section_" .. p213
+            vu214.Size = UDim2.new(1, 0, 0, 0)
+            vu214.BackgroundTransparency = 1
+            vu214.AutomaticSize = Enum.AutomaticSize.Y
+            vu214.Parent = vu208
+            local v215 = Instance.new("UIListLayout", vu214)
+            v215.SortOrder = Enum.SortOrder.LayoutOrder
+            v215.Padding = UDim.new(0, 5)
+            local v216 = Instance.new("TextLabel")
+            v216.Text = p213
+            v216.Font = Enum.Font.GothamBold
+            v216.TextSize = 12
+            v216.TextColor3 = vu83.TextDim
+            v216.Size = UDim2.new(1, 0, 0, 20)
+            v216.TextXAlignment = Enum.TextXAlignment.Left
+            v216.TextYAlignment = Enum.TextYAlignment.Bottom
+            v216.BackgroundTransparency = 1
+            v216.LayoutOrder = 0
+            v216.Parent = vu214
+            local vu217 = Instance.new("Frame")
+            vu217.BackgroundColor3 = vu83.ElementBG
+            vu217.BackgroundTransparency = 0.5
+            vu217.LayoutOrder = 2
+            vu217.Parent = vu214
+            vu106.CreateCorner(vu217, 10)
+            local vu218 = Instance.new("UIListLayout", vu217)
+            vu218.SortOrder = Enum.SortOrder.LayoutOrder
+            vu218.Padding = UDim.new(0, 1)
+            local v219 = vu218
+            vu218.GetPropertyChangedSignal(v219, "AbsoluteContentSize"):Connect(function()
+                vu217.Size = UDim2.new(1, 0, 0, vu218.AbsoluteContentSize.Y)
+            end)
+            return {
+                SetDescription = function(_, p220)
+                    local v221 = Instance.new("TextLabel")
+                    v221.Text = p220
+                    v221.Font = Enum.Font.Gotham
+                    v221.TextSize = 11
+                    v221.TextColor3 = vu83.TextDim
+                    v221.Size = UDim2.new(1, 0, 0, 0)
+                    v221.TextXAlignment = Enum.TextXAlignment.Left
+                    v221.TextWrapped = true
+                    v221.AutomaticSize = Enum.AutomaticSize.Y
+                    v221.BackgroundTransparency = 1
+                    v221.LayoutOrder = 1
+                    v221.Parent = vu214
+                    Instance.new("UIPadding", v221).PaddingBottom = UDim.new(0, 5)
+                end,
+                AddButton = function(_, p222, pu223)
+                    local vu224 = Instance.new("TextButton")
+                    vu224.Size = UDim2.new(1, 0, 0, 40)
+                    vu224.BackgroundTransparency = 1
+                    vu224.BackgroundColor3 = vu83.Selected
+                    vu224.Text = ""
+                    vu224.AutoButtonColor = false
+                    vu224.Parent = vu217
+                    local v225 = Instance.new("TextLabel")
+                    v225.Text = p222
+                    v225.Font = Enum.Font.GothamMedium
+                    v225.TextSize = 13
+                    v225.TextColor3 = vu83.Text
+                    v225.Size = UDim2.new(1, - 40, 1, 0)
+                    v225.Position = UDim2.new(0, 15, 0, 0)
+                    v225.TextXAlignment = Enum.TextXAlignment.Left
+                    v225.BackgroundTransparency = 1
+                    v225.Parent = vu224
+                    local v226 = Instance.new("ImageLabel")
+                    v226.Size = UDim2.new(0, 24, 0, 24)
+                    v226.Position = UDim2.new(1, - 34, 0.5, - 12)
+                    v226.BackgroundTransparency = 1
+                    v226.Image = vu84.Mouse
+                    v226.ImageColor3 = vu83.TextDim
+                    v226.ScaleType = Enum.ScaleType.Fit
+                    v226.Parent = vu224
+                    vu224.MouseEnter:Connect(function()
+                        vu106.Tween(vu224, TweenInfo.new(0.2), {
+                            BackgroundTransparency = 0.9
+                        })
+                    end)
+                    vu224.MouseLeave:Connect(function()
+                        vu106.Tween(vu224, TweenInfo.new(0.2), {
+                            BackgroundTransparency = 1
+                        })
+                    end)
+                    vu224.MouseButton1Click:Connect(function()
+                        pcall(pu223)
+                    end)
+                end,
+                AddToggle = function(_, p227, p228, pu229)
+                    local vu230 = p228 or false
+                    local v231 = Instance.new("TextButton")
+                    v231.Size = UDim2.new(1, 0, 0, 40)
+                    v231.BackgroundTransparency = 1
+                    v231.BackgroundColor3 = vu83.Selected
+                    v231.Text = ""
+                    v231.AutoButtonColor = false
+                    v231.Parent = vu217
+                    local v232 = Instance.new("TextLabel")
+                    v232.Text = p227
+                    v232.Font = Enum.Font.GothamMedium
+                    v232.TextSize = 13
+                    v232.TextColor3 = vu83.Text
+                    v232.Size = UDim2.new(1, - 60, 1, 0)
+                    v232.Position = UDim2.new(0, 15, 0, 0)
+                    v232.TextXAlignment = Enum.TextXAlignment.Left
+                    v232.BackgroundTransparency = 1
+                    v232.Parent = v231
+                    local v233 = Instance.new("Frame")
+                    v233.Size = UDim2.new(0, 40, 0, 20)
+                    v233.Position = UDim2.new(1, - 50, 0.5, - 10)
+                    v233.BackgroundColor3 = vu83.Main
+                    v233.BorderSizePixel = 0
+                    v233.Parent = v231
+                    vu106.CreateCorner(v233, 20)
+                    local vu234 = Instance.new("Frame")
+                    vu234.Size = UDim2.new(0, 16, 0, 16)
+                    vu234.Position = UDim2.new(0, 2, 0.5, - 8)
+                    vu234.BorderSizePixel = 0
+                    vu234.Parent = v233
+                    vu106.CreateCorner(vu234, 16)
+                    local function vu235()
+                        if vu230 then
+                            vu106.Tween(vu234, TweenInfo.new(0.2), {
+                                Position = UDim2.new(1, - 18, 0.5, - 8),
+                                BackgroundColor3 = Color3.fromRGB(60, 255, 60)
+                            })
+                        else
+                            vu106.Tween(vu234, TweenInfo.new(0.2), {
+                                Position = UDim2.new(0, 2, 0.5, - 8),
+                                BackgroundColor3 = Color3.fromRGB(255, 60, 60)
+                            })
+                        end
+                        pcall(pu229, vu230)
+                    end
+                    v231.MouseButton1Click:Connect(function()
+                        vu230 = not vu230
+                        vu235()
+                    end)
+                    if vu230 then
+                        vu234.Position = UDim2.new(1, - 18, 0.5, - 8)
+                        vu234.BackgroundColor3 = Color3.fromRGB(60, 255, 60)
+                    else
+                        vu234.Position = UDim2.new(0, 2, 0.5, - 8)
+                        vu234.BackgroundColor3 = Color3.fromRGB(255, 60, 60)
+                    end
+                    pcall(pu229, vu230)
+                    return {
+                        Set = function(_, p236)
+                            if vu230 ~= p236 then
+                                vu230 = p236
+                                vu235()
+                            end
+                        end
+                    }
+                end,
+                AddCheckmark = function(_, p237, p238, pu239)
+                    local vu240 = p238 or false
+                    local v241 = Instance.new("TextButton")
+                    v241.Size = UDim2.new(1, 0, 0, 40)
+                    v241.BackgroundTransparency = 1
+                    v241.BackgroundColor3 = vu83.Selected
+                    v241.Text = ""
+                    v241.AutoButtonColor = false
+                    v241.Parent = vu217
+                    local v242 = Instance.new("TextLabel")
+                    v242.Text = p237
+                    v242.Font = Enum.Font.GothamMedium
+                    v242.TextSize = 13
+                    v242.TextColor3 = vu83.Text
+                    v242.Size = UDim2.new(1, - 40, 1, 0)
+                    v242.Position = UDim2.new(0, 15, 0, 0)
+                    v242.TextXAlignment = Enum.TextXAlignment.Left
+                    v242.BackgroundTransparency = 1
+                    v242.Parent = v241
+                    local vu243 = Instance.new("ImageLabel")
+                    vu243.Size = UDim2.new(0, 16, 0, 16)
+                    vu243.Position = UDim2.new(1, - 30, 0.5, - 8)
+                    vu243.BackgroundTransparency = 1
+                    vu243.Image = vu84.Check
+                    vu243.ImageColor3 = vu83.TextDim
+                    vu243.ScaleType = Enum.ScaleType.Fit
+                    vu243.Parent = v241
+                    local function vu245(p244)
+                        if vu240 then
+                            vu243.ImageColor3 = Color3.fromRGB(60, 255, 60)
+                        else
+                            vu243.ImageColor3 = vu83.TextDim
+                        end
+                        if not p244 then
+                            pcall(pu239, vu240)
+                        end
+                    end
+                    v241.MouseButton1Click:Connect(function()
+                        vu240 = not vu240
+                        vu245()
+                    end)
+                    vu245()
+                    return {
+                        Set = function(_, p246)
+                            vu240 = p246
+                            vu245()
+                        end
+                    }
+                end,
+                AddSlider = function(_, p247, pu248, pu249, p250, pu251)
+                    local vu252 = p250 or pu248
+                    local vu253 = Instance.new("Frame")
+                    vu253.Size = UDim2.new(1, 0, 0, 50)
+                    vu253.BackgroundTransparency = 1
+                    vu253.Parent = vu217
+                    local v254 = Instance.new("TextLabel")
+                    v254.Text = p247
+                    v254.Font = Enum.Font.GothamMedium
+                    v254.TextSize = 13
+                    v254.TextColor3 = vu83.Text
+                    v254.Size = UDim2.new(1, - 80, 0, 20)
+                    v254.Position = UDim2.new(0, 15, 0, 8)
+                    v254.TextXAlignment = Enum.TextXAlignment.Left
+                    v254.BackgroundTransparency = 1
+                    v254.Parent = vu253
+                    local vu255 = Instance.new("TextBox")
+                    vu255.Text = tostring(vu252)
+                    vu255.Font = Enum.Font.GothamBold
+                    vu255.TextSize = 12
+                    vu255.TextColor3 = vu83.TextDim
+                    vu255.Size = UDim2.new(0, 60, 0, 20)
+                    vu255.Position = UDim2.new(1, - 75, 0, 8)
+                    vu255.TextXAlignment = Enum.TextXAlignment.Right
+                    vu255.BackgroundTransparency = 1
+                    vu255.Parent = vu253
+                    local vu256 = Instance.new("TextButton")
+                    vu256.Text = ""
+                    vu256.AutoButtonColor = false
+                    vu256.Size = UDim2.new(1, - 30, 0, 20)
+                    vu256.Position = UDim2.new(0, 15, 0, 27)
+                    vu256.BackgroundTransparency = 1
+                    vu256.Parent = vu253
+                    local v257 = Instance.new("Frame")
+                    v257.Name = "Track"
+                    v257.Size = UDim2.new(1, 0, 0, 4)
+                    v257.Position = UDim2.new(0, 0, 0.5, - 2)
+                    v257.BackgroundColor3 = vu83.Main
+                    v257.BorderSizePixel = 0
+                    v257.Parent = vu256
+                    vu106.CreateCorner(v257, 2)
+                    local vu258 = Instance.new("Frame")
+                    vu258.Size = UDim2.new(0, 0, 1, 0)
+                    vu258.BackgroundColor3 = vu83.Accent
+                    vu258.Parent = v257
+                    vu106.CreateCorner(vu258, 2)
+                    local function vu260(p259)
+                        if p259 >= 1000000000000 then
+                            return string.format("%.1fT", p259 / 1000000000000)
+                        elseif p259 >= 1000000000 then
+                            return string.format("%.1fB", p259 / 1000000000)
+                        elseif p259 >= 1000000 then
+                            return string.format("%.1fM", p259 / 1000000)
+                        elseif p259 >= 1000 then
+                            return string.format("%.1fK", p259 / 1000)
+                        else
+                            return tostring(p259)
+                        end
+                    end
+                    local function vu264(p261)
+                        local v262 = p261:lower()
+                        local v263 = tonumber(v262:match("[%d%.]+"))
+                        if not v263 then
+                            return nil
+                        end
+                        if v262:find("k") then
+                            v263 = v263 * 1000
+                        end
+                        if v262:find("m") then
+                            v263 = v263 * 1000000
+                        end
+                        if v262:find("b") then
+                            v263 = v263 * 1000000000
+                        end
+                        if v262:find("t") then
+                            v263 = v263 * 1000000000000
+                        end
+                        return math.floor(v263)
+                    end
+                    local function vu268(p265, p266)
+                        local v267 = math.clamp((p265.Position.X - vu256.AbsolutePosition.X) / vu256.AbsoluteSize.X, 0, 1)
+                        vu252 = math.floor(pu248 + (pu249 - pu248) * v267)
+                        vu255.Text = vu260(vu252)
+                        vu258.Size = UDim2.new(v267, 0, 1, 0)
+                        pcall(pu251, vu252, p266)
+                    end
+                    local vu269 = false
+                    vu256.ZIndex = 5
+                    vu256.InputBegan:Connect(function(p270)
+                        if p270.UserInputType == Enum.UserInputType.MouseButton1 or p270.UserInputType == Enum.UserInputType.Touch then
+                            vu269 = true
+                            vu268(p270, true)
+                        end
+                    end)
+                    vu2.InputChanged:Connect(function(p271)
+                        if vu269 and (p271.UserInputType == Enum.UserInputType.MouseMovement or p271.UserInputType == Enum.UserInputType.Touch) then
+                            vu268(p271, false)
+                        end
+                    end)
+                    vu2.InputEnded:Connect(function(p272)
+                        if (p272.UserInputType == Enum.UserInputType.MouseButton1 or p272.UserInputType == Enum.UserInputType.Touch) and vu269 then
+                            vu269 = false
+                            vu268(p272, true)
+                        end
+                    end)
+                    vu255.FocusLost:Connect(function()
+                        local v273 = vu264(vu255.Text)
+                        if v273 then
+                            vu252 = math.clamp(v273, pu248, pu249)
+                            vu255.Text = vu260(vu252)
+                            local v274 = (vu252 - pu248) / (pu249 - pu248)
+                            vu258.Size = UDim2.new(v274, 0, 1, 0)
+                            pcall(pu251, vu252, true)
+                        else
+                            vu255.Text = vu260(vu252)
+                        end
+                    end)
+                    local v275 = (vu252 - pu248) / (pu249 - pu248)
+                    vu258.Size = UDim2.new(v275, 0, 1, 0)
+                    vu255.Text = vu260(vu252)
+                    return {
+                        Set = function(_, p276, p277, p278)
+                            if p277 then
+                                pu248 = p277
+                            end
+                            if p278 then
+                                pu249 = p278
+                            end
+                            local v279 = p276 or vu252
+                            vu252 = math.clamp(v279, pu248, pu249)
+                            vu255.Text = vu260(vu252)
+                            local v280 = pu249 - pu248
+                            local v281 = v280 == 0 and 0 or (vu252 - pu248) / v280
+                            vu258.Size = UDim2.new(v281, 0, 1, 0)
+                        end,
+                        Destroy = function()
+                            vu253:Destroy()
+                        end
+                    }
+                end,
+                AddTextBox = function(_, p282, p283, pu284)
+                    local v285 = Instance.new("Frame")
+                    v285.Size = UDim2.new(1, 0, 0, 40)
+                    v285.BackgroundTransparency = 1
+                    v285.Parent = vu217
+                    local v286 = Instance.new("TextLabel")
+                    v286.Text = p282
+                    v286.Font = Enum.Font.GothamMedium
+                    v286.TextSize = 13
+                    v286.TextColor3 = vu83.Text
+                    v286.Size = UDim2.new(0, 100, 1, 0)
+                    v286.Position = UDim2.new(0, 15, 0, 0)
+                    v286.TextXAlignment = Enum.TextXAlignment.Left
+                    v286.BackgroundTransparency = 1
+                    v286.Parent = v285
+                    local vu287 = Instance.new("TextBox")
+                    vu287.Text = ""
+                    vu287.PlaceholderText = p283 or "..."
+                    vu287.PlaceholderColor3 = vu83.TextDim
+                    vu287.TextColor3 = vu83.Text
+                    vu287.Font = Enum.Font.Gotham
+                    vu287.TextSize = 13
+                    vu287.Size = UDim2.new(0.5, 0, 0.7, 0)
+                    vu287.Position = UDim2.new(1, - 15, 0.5, 0)
+                    vu287.AnchorPoint = Vector2.new(1, 0.5)
+                    vu287.BackgroundColor3 = vu83.Main
+                    vu287.TextXAlignment = Enum.TextXAlignment.Center
+                    vu287.Parent = v285
+                    vu106.CreateCorner(vu287, 6)
+                    vu287.FocusLost:Connect(function(_)
+                        pcall(pu284, vu287.Text)
+                    end)
+                end
+            }
+        end
+        if p202 == "Settings" then
+            vu207.Image = vu84.Settings
+            v204:AddSection("Information"):SetDescription("Press [INSERT] to minimize/maximize the UI.\nAuto Rejoin: Automatically reconnects if you get disconnected (Error 277/268/etc).")
+            local v288 = v204:AddSection("Account Connection")
+            v288:SetDescription("Connect your Haze account to track stats.\nHead over to haze.wtf to get your connection token.")
+            local vu289 = ""
+            v288:AddTextBox("Connection Token", "Enter Token...", function(p290)
+                vu289 = p290
+            end)
+            v288:AddButton("Connect Account", function()
+                vu166:ConnectAccount(vu289)
+            end)
+            local v291 = v204:AddSection("Discord")
+            v291:SetDescription("Join our Discord server to stay updated!")
+            v291:AddButton("Join Discord", function()
+                local v292 = "https://discord.gg/M23DKmm7Yg"
+                if setclipboard then
+                    setclipboard(v292)
+                    vu166:Notify("Discord", "Invite link copied to clipboard!", 7)
+                end
+                task.spawn(function()
+                    local vu293 = syn and syn.request or (http and http.request or vu14)
+                    if vu293 then
+                        pcall(function()
+                            local v294 = vu293
+                            local v295 = {
+                                Url = "http://127.0.0.1:6463/rpc?v=1",
+                                Method = "POST",
+                                Headers = {
+                                    ["Content-Type"] = "application/json",
+                                    Origin = "https://discord.com"
+                                }
+                            }
+                            local v296 = vu8
+                            local v297 = v296.JSONEncode
+                            local v298 = {
+                                cmd = "INVITE_BROWSER",
+                                args = {
+                                    code = "M23DKmm7Yg"
+                                },
+                                nonce = vu8:GenerateGUID(false)
+                            }
+                            v295.Body = v297(v296, v298)
+                            v294(v295)
+                        end)
+                    end
+                end)
+            end)
+        end
+        return v204
+    end
+    vu166:AddTab("Settings", vu84.Settings)
+    local v299 = vu193
+    local v300 = vu193.FindFirstChild(v299, "Settings")
+    if v300 then
+        v300.LayoutOrder = 999999
+    end
+    if # vu200 > 0 and vu200[1].Activate then
+        vu200[1].Activate()
+    end
+    return vu166
+end
+function vu1.SetGameDataCallback(p301)
+    if type(p301) == "function" then
+        vu27.GameDataCallback = p301
+        return true
+    else
+        warn("[Haze] Game data callback must be a function")
+        return false
+    end
+end
+function vu1.InitializeConfig(p302, p303)
+    return vu107.Initialize(p302, p303)
+end
+function vu1.SaveConfig(p304)
+    return vu107.Save(p304)
+end
+function vu1.UpdateConfig(p305, p306, p307)
+    return vu107.Update(p305, p306, p307)
+end
+function vu1.GetConfig(p308)
+    return vu107.Get(p308)
+end
+function vu1.GetConfigValue(p309, p310)
+    return vu107.GetValue(p309, p310)
+end
+function vu1.GetStatus()
+    return {
+        verified = vu27.Verified,
+        hwid = vu27.HWID,
+        expiresAt = vu27.ExpiresAt,
+        timeRemaining = math.max(0, (vu27.ExpiresAt or 0) - os.time()),
+        lastHeartbeat = vu27.LastHeartbeat,
+        heartbeatFailures = vu27.HeartbeatFailures,
+        maxFailures = vu27.MaxFailures
+    }
+end
+function vu1.new(p311, _, _)
+    local v312 = vu1:CreateWindow({
+        Name = p311
+    })
+    vu1:Notify("Don\'t forget to join our Discord server for the updates! discord.gg/hazewtf", 10)
+    task.spawn(function()
+        local vu313 = syn and syn.request or (http and http.request or vu14)
+        if vu313 and vu16() ~= "Wave" then
+            pcall(function()
+                local v314 = vu313
+                local v315 = {
+                    Url = "http://127.0.0.1:6463/rpc?v=1",
+                    Method = "POST",
+                    Headers = {
+                        ["Content-Type"] = "application/json",
+                        Origin = "https://discord.com"
+                    }
+                }
+                local v316 = vu8
+                local v317 = v316.JSONEncode
+                local v318 = {
+                    cmd = "INVITE_BROWSER",
+                    args = {
+                        code = "M23DKmm7Yg"
+                    },
+                    nonce = vu8:GenerateGUID(false)
+                }
+                v315.Body = v317(v316, v318)
+                v314(v315)
+            end)
+        end
+    end)
+    return v312
+end
+task.spawn(function()
+    local vu319 = game:GetService("TeleportService")
+    repeat
+        task.wait()
+    until vu6:FindFirstChild("RobloxPromptGui")
+    vu6.RobloxPromptGui:WaitForChild("promptOverlay").ChildAdded:Connect(function(p320)
+        if p320.Name ~= "ErrorPrompt" then
+            return
+        else
+            while true do
+                vu319:Teleport(game.PlaceId)
+                task.wait(2)
+            end
+        end
+    end)
+end)
+local vu321 = game:GetService("VirtualUser")
+vu5.LocalPlayer.Idled:Connect(function()
+    vu321:CaptureController()
+    vu321:ClickButton2(Vector2.new())
+end)
+_G.HazePrivate = true
+return vu1
