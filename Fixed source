@@ -1,0 +1,1741 @@
+-- Haze Hub Library - Deobfuscated Version
+local HazeHub = {}
+local UserInputService = game:GetService("UserInputService")
+local TweenService = game:GetService("TweenService")
+local RunService = game:GetService("RunService")
+local Players = game:GetService("Players")
+local CoreGui = game:GetService("CoreGui")
+local TextService = game:GetService("TextService")
+local HttpService = game:GetService("HttpService")
+local MarketplaceService = game:GetService("MarketplaceService")
+local TeleportService = game:GetService("TeleportService")
+
+-- API Configuration
+local API_URL = "https://haze.wtf/api/verify"
+local HEARTBEAT_INTERVAL = 60
+
+-- Helper function to get global variables
+local function GetGlobal(varName)
+    return getgenv and getgenv()[varName] or _G[varName]
+end
+
+-- Get HTTP request function from various executors
+local httpRequest = not GetGlobal("request") and (not GetGlobal("http_request") and http)
+if httpRequest then
+    httpRequest = http.request
+end
+
+-- Executor identification
+local getHWID = GetGlobal("gethwid")
+local identifyExecutor = GetGlobal("identifyexecutor")
+
+-- User data collection
+local function CollectUserData()
+    local executorName = "Unknown"
+    pcall(function()
+        executorName = identifyExecutor and identifyExecutor() or "Unknown"
+    end)
+    
+    local gameInfo = {}
+    pcall(function()
+        gameInfo = MarketplaceService:GetProductInfo(game.PlaceId)
+    end)
+    
+    local playerName = Players.LocalPlayer.Name
+    local userId = Players.LocalPlayer.UserId
+    
+    pcall(function()
+        local nameId = Players:GetUserIdFromNameAsync(playerName)
+        if nameId then
+            userId = nameId
+        end
+    end)
+    
+    return {
+        username = playerName,
+        userId = userId,
+        displayName = Players.LocalPlayer.DisplayName,
+        accountAge = Players.LocalPlayer.AccountAge,
+        executor = executorName,
+        game = {
+            placeId = game.PlaceId,
+            gameId = game.GameId,
+            jobId = game.JobId,
+            placeName = gameInfo.Name or "Unknown",
+            creator = gameInfo.Creator and gameInfo.Creator.Name or "Unknown"
+        }
+    }
+end
+
+-- Session management
+local Session = {
+    Token = nil,
+    ExpiresAt = 0,
+    HWID = (function()
+        local success, hwid = pcall(function()
+            local hwidFunc = getHWID
+            if hwidFunc then
+                hwidFunc = getHWID()
+            end
+            return hwidFunc
+        end)
+        return success and hwid and hwid or HttpService:GenerateGUID(false):gsub("-", ""):sub(1, 16)
+    end)(),
+    UserData = CollectUserData(),
+    Verified = false,
+    HeartbeatConnection = nil,
+    LastHeartbeat = 0,
+    GameDataCallback = nil,
+    HeartbeatFailures = 0,
+    MaxFailures = 5
+}
+
+-- Custom encryption function
+local function EncryptData(data)
+    local key = ""
+    for _ = 1, 16 do
+        key = key .. string.char(math.random(33, 126))
+    end
+    
+    local keySum = 0
+    for i = 1, #key do
+        keySum = keySum + string.byte(key, i)
+    end
+    
+    local dataBytes = {}
+    for i = 1, #data do
+        dataBytes[i] = string.byte(data, i)
+    end
+    
+    local xorBase = keySum % 255 + 1
+    for i = 1, #dataBytes do
+        local xorValue = (keySum + i * xorBase) % 255 + 1
+        dataBytes[i] = bit32.bxor(dataBytes[i], xorValue)
+    end
+    
+    local checksum = keySum % 256
+    for i = 1, #dataBytes do
+        checksum = bit32.bxor(checksum, dataBytes[i])
+    end
+    
+    local keyBytes = {}
+    for i = 1, #key do
+        keyBytes[i] = bit32.bxor(string.byte(key, i), i * 17 % 256)
+    end
+    
+    local encrypted = string.char(#key)
+    for i = 1, #keyBytes do
+        encrypted = encrypted .. string.char(keyBytes[i])
+    end
+    
+    encrypted = encrypted .. string.char(checksum)
+    for i = 1, #dataBytes do
+        encrypted = encrypted .. string.char(dataBytes[i])
+    end
+    
+    local encryptedBytes = {string.byte(encrypted, 1, #encrypted)}
+    local base64 = ""
+    local alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+    
+    for i = 1, #encryptedBytes, 3 do
+        local byte1 = encryptedBytes[i] or 0
+        local byte2 = encryptedBytes[i + 1] or 0
+        local byte3 = encryptedBytes[i + 2] or 0
+        local combined = byte1 * 65536 + byte2 * 256 + byte3
+        
+        base64 = base64 .. alphabet:sub(bit32.extract(combined, 18, 6) + 1, bit32.extract(combined, 18, 6) + 1)
+        base64 = base64 .. alphabet:sub(bit32.extract(combined, 12, 6) + 1, bit32.extract(combined, 12, 6) + 1)
+        base64 = base64 .. (encryptedBytes[i + 1] and alphabet:sub(bit32.extract(combined, 6, 6) + 1, bit32.extract(combined, 6, 6) + 1) or "=")
+        base64 = base64 .. (encryptedBytes[i + 2] and alphabet:sub(bit32.extract(combined, 0, 6) + 1, bit32.extract(combined, 0, 6) + 1) or "=")
+    end
+    
+    return "HZ2:" .. base64
+end
+
+-- Request initial token
+local function RequestToken()
+    if not httpRequest then
+        return false
+    end
+    
+    local encrypted = EncryptData(HttpService:JSONEncode({
+        action = "REQUEST",
+        hwid = Session.HWID,
+        userData = Session.UserData
+    }))
+    
+    local success, response = pcall(function()
+        return httpRequest({
+            Url = API_URL,
+            Method = "POST",
+            Headers = {
+                ["Content-Type"] = "text/plain",
+                ["X-Haze-Encrypted"] = "true"
+            },
+            Body = encrypted
+        })
+    end)
+    
+    if success and response.StatusCode == 200 then
+        local data = HttpService:JSONDecode(response.Body)
+        if data.success then
+            Session.Token = data.token
+            Session.ExpiresAt = data.expiresAt
+            return true
+        end
+    end
+    return false
+end
+
+-- Verify token
+local function VerifyToken()
+    if not (Session.Token and httpRequest) then
+        return false
+    end
+    
+    local encrypted = EncryptData(HttpService:JSONEncode({
+        action = "VERIFY",
+        token = Session.Token,
+        hwid = Session.HWID
+    }))
+    
+    local success, response = pcall(function()
+        return httpRequest({
+            Url = API_URL,
+            Method = "POST",
+            Headers = {
+                ["Content-Type"] = "text/plain",
+                ["X-Haze-Encrypted"] = "true"
+            },
+            Body = encrypted
+        })
+    end)
+    
+    if not success or response.StatusCode ~= 200 then
+        return false
+    end
+    
+    local data = HttpService:JSONDecode(response.Body)
+    return data.success and data.valid
+end
+
+-- Heartbeat system
+local function StartHeartbeat()
+    Session.HeartbeatConnection = task.spawn(function()
+        while Session.Verified do
+            task.wait(HEARTBEAT_INTERVAL)
+            Session.LastHeartbeat = os.time()
+            
+            local gameData = nil
+            if Session.GameDataCallback and type(Session.GameDataCallback) == "function" then
+                local success, data = pcall(Session.GameDataCallback)
+                if success and type(data) == "table" then
+                    gameData = data
+                end
+            end
+            
+            local encrypted = EncryptData(HttpService:JSONEncode({
+                action = "HEARTBEAT",
+                token = Session.Token,
+                hwid = Session.HWID,
+                userData = Session.UserData,
+                gameData = gameData,
+                timestamp = os.time()
+            }))
+            
+            local success, response = pcall(function()
+                return httpRequest({
+                    Url = API_URL,
+                    Method = "POST",
+                    Headers = {
+                        ["Content-Type"] = "text/plain",
+                        ["X-Haze-Encrypted"] = "true"
+                    },
+                    Body = encrypted
+                })
+            end)
+            
+            -- Handle 403 Forbidden
+            if success and response.StatusCode == 403 then
+                warn("[Haze] ❔ Access forbidden")
+                Session.Verified = false
+                if _G.HazeHubUI then
+                    _G.HazeHubUI:Destroy()
+                end
+                Players.LocalPlayer:Kick("We can't connect to Haze servers. Try reopening the game.")
+                break
+            end
+            
+            -- Handle heartbeat success/failure
+            if success and response.StatusCode == 200 then
+                Session.HeartbeatFailures = 0
+            else
+                Session.HeartbeatFailures = Session.HeartbeatFailures + 1
+                warn("[Haze] Heartbeat failed (" .. Session.HeartbeatFailures .. "/" .. Session.MaxFailures .. ")")
+                
+                if Session.HeartbeatFailures >= Session.MaxFailures then
+                    warn("[Haze] ⚠️ Max heartbeat failures reached! Destroying UI...")
+                    Session.Verified = false
+                    if _G.HazeHubUI then
+                        _G.HazeHubUI:Destroy()
+                    end
+                    Players.LocalPlayer:Kick("Connection failed to Haze servers. Try again.")
+                    break
+                end
+            end
+            
+            -- Check token expiration
+            if os.time() >= Session.ExpiresAt then
+                warn("[Haze] Session expired. Requesting new token...")
+                if not (RequestToken() and VerifyToken()) then
+                    warn("[Haze] Failed to renew session. UI will be disabled.")
+                    Session.Verified = false
+                    if _G.HazeHubUI then
+                        _G.HazeHubUI:Destroy()
+                    end
+                    Players.LocalPlayer:Kick("Connection failed to Haze servers. Try again.")
+                    break
+                end
+            end
+        end
+    end)
+end
+
+-- Initial verification
+if not (function()
+    if not httpRequest then
+        warn("[Haze] Executor not supported (missing request function).")
+        return false
+    end
+    
+    if not RequestToken() then
+        warn("[Haze] Failed to connect to verification server.")
+        warn("[Haze] Please check your internet connection.")
+        return false
+    end
+    
+    if not VerifyToken() then
+        warn("[Haze] Verification failed! This appears to be an unauthorized copy.")
+        return false
+    end
+    
+    Session.Verified = true
+    StartHeartbeat()
+    return true
+end)() then
+    return nil
+end
+
+-- API Functions
+local API = {
+    Connect = function(token)
+        if not token or token == "" then
+            return {
+                success = false,
+                error = "Token cannot be empty"
+            }
+        end
+        
+        local data = {
+            token = token,
+            userId = Players.LocalPlayer.UserId,
+            username = Players.LocalPlayer.Name,
+            displayName = Players.LocalPlayer.DisplayName,
+            hwid = Session.HWID
+        }
+        
+        local success, response = pcall(function()
+            return httpRequest({
+                Url = "https://haze.wtf/api/game/connect",
+                Method = "POST",
+                Headers = {
+                    ["Content-Type"] = "application/json"
+                },
+                Body = HttpService:JSONEncode(data)
+            })
+        end)
+        
+        if not success then
+            return {
+                success = false,
+                error = "Connection failed"
+            }
+        end
+        
+        local result = HttpService:JSONDecode(response.Body)
+        return result.success and {
+            success = true,
+            status = result.status,
+            message = result.message,
+            needsVerification = result.status == "pending_verification"
+        } or {
+            success = false,
+            error = result.error or (result.message or "Unknown error")
+        }
+    end
+}
+
+-- UI Theme
+local Theme = {
+    Main = Color3.fromRGB(30, 20, 15),
+    Sidebar = Color3.fromRGB(30, 20, 15),
+    ContentBG = Color3.fromRGB(45, 30, 25),
+    ElementBG = Color3.fromRGB(60, 40, 35),
+    Selected = Color3.fromRGB(75, 50, 40),
+    Text = Color3.fromRGB(230, 220, 210),
+    TextDim = Color3.fromRGB(160, 140, 130),
+    Accent = Color3.fromRGB(255, 100, 100),
+    Stroke = Color3.fromRGB(80, 60, 50)
+}
+
+-- UI Icons
+local Icons = {
+    Search = "rbxassetid://6031154871",
+    Home = "rbxassetid://6031763426",
+    Settings = "rbxassetid://6031280882",
+    User = "rbxassetid://6031280882",
+    Mouse = "rbxassetid://9468220156",
+    Check = "rbxassetid://6031094667",
+    SwitchOn = "rbxassetid://5533192672",
+    SwitchOff = "rbxassetid://5533209494"
+}
+
+-- UI Utilities
+local UIUtils = {
+    Tween = function(object, tweenInfo, properties)
+        local tween = TweenService:Create(object, tweenInfo, properties)
+        tween:Play()
+        return tween
+    end,
+    
+    CreateCorner = function(object, radius)
+        local corner = Instance.new("UICorner")
+        corner.CornerRadius = UDim.new(0, radius or 8)
+        corner.Parent = object
+        return corner
+    end,
+    
+    CreateStroke = function(object, color, thickness)
+        local stroke = Instance.new("UIStroke")
+        stroke.Color = color or Theme.Stroke
+        stroke.Thickness = thickness or 1
+        stroke.Transparency = 0.5
+        stroke.Parent = object
+        return stroke
+    end,
+    
+    CreateDrag = function(target, dragHandle)
+        local dragStart, startPos, dragging, dragInput
+        
+        dragHandle.InputBegan:Connect(function(input)
+            if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+                dragging = true
+                dragStart = input.Position
+                startPos = target.Position
+                
+                input.Changed:Connect(function()
+                    if input.UserInputState == Enum.UserInputState.End then
+                        dragging = false
+                    end
+                end)
+            end
+        end)
+        
+        dragHandle.InputChanged:Connect(function(input)
+            if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
+                dragInput = input
+            end
+        end)
+        
+        UserInputService.InputChanged:Connect(function(input)
+            if input == dragInput and dragging then
+                local delta = input.Position - dragStart
+                UIUtils.Tween(target, TweenInfo.new(0.1), {
+                    Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+                })
+            end
+        end)
+    end
+}
+
+-- Configuration System
+local ConfigSystem = {
+    Configs = {}
+}
+
+local function DeepCopy(table)
+    if type(table) ~= "table" then
+        return table
+    end
+    
+    local copy = {}
+    for key, value in pairs(table) do
+        copy[key] = DeepCopy(value)
+    end
+    return copy
+end
+
+local function MergeConfigs(base, override)
+    local result = DeepCopy(base)
+    for key, value in pairs(override) do
+        if result[key] ~= nil then
+            if type(value) == "table" and type(result[key]) == "table" then
+                result[key] = MergeConfigs(result[key], value)
+            end
+        else
+            result[key] = DeepCopy(value)
+        end
+    end
+    return result
+end
+
+local function EnsureConfigFolder()
+    local folderName = "Haze"
+    if isfolder and not isfolder(folderName) then
+        makefolder(folderName)
+    end
+end
+
+function ConfigSystem.Initialize(scriptName, defaultConfig)
+    if not scriptName or type(scriptName) ~= "string" then
+        warn("[Haze Config] Script name must be a string")
+        return nil
+    end
+    
+    if not defaultConfig or type(defaultConfig) ~= "table" then
+        warn("[Haze Config] Default config must be a table")
+        return nil
+    end
+    
+    if ConfigSystem.Configs[scriptName] then
+        return ConfigSystem.Configs[scriptName].Config
+    end
+    
+    if not (makefolder and isfolder and isfile and readfile and writefile) then
+        warn("[Haze Config] Filesystem functions missing. Configs will not save.")
+        return DeepCopy(defaultConfig)
+    end
+    
+    EnsureConfigFolder()
+    
+    local configFile = "Haze/" .. scriptName .. ".json"
+    local config = DeepCopy(defaultConfig)
+    
+    if isfile(configFile) then
+        local success, loaded = pcall(function()
+            return HttpService:JSONDecode(readfile(configFile))
+        end)
+        
+        if success and loaded then
+            config = MergeConfigs(loaded, defaultConfig)
+        else
+            warn("[Haze Config] ⚠️ Failed to load config, using defaults")
+            config = DeepCopy(defaultConfig)
+        end
+    end
+    
+    ConfigSystem.Configs[scriptName] = {
+        Config = config,
+        ConfigFile = configFile,
+        DefaultConfig = DeepCopy(defaultConfig),
+        LastSaveHash = nil
+    }
+    
+    local function GetConfigHash(configTable)
+        local success, json = pcall(function()
+            return HttpService:JSONEncode(configTable)
+        end)
+        return success and json or tostring(configTable)
+    end
+    
+    ConfigSystem.Configs[scriptName].LastSaveHash = GetConfigHash(config)
+    ConfigSystem.Save(scriptName)
+    
+    -- Auto-save
+    task.spawn(function()
+        while true do
+            local configEntry = task.wait(1) and ConfigSystem.Configs[scriptName]
+            if not configEntry then
+                break
+            end
+            
+            local currentHash = GetConfigHash(configEntry.Config)
+            if currentHash ~= configEntry.LastSaveHash and ConfigSystem.Save(scriptName) then
+                configEntry.LastSaveHash = currentHash
+            end
+        end
+    end)
+    
+    return config
+end
+
+function ConfigSystem.Save(scriptName)
+    local configEntry = ConfigSystem.Configs[scriptName]
+    if not configEntry then
+        warn("[Haze Config] No config found for " .. scriptName)
+        return false
+    end
+    
+    if not writefile then
+        return false
+    end
+    
+    local success, error = pcall(function()
+        local json = HttpService:JSONEncode(configEntry.Config)
+        writefile(configEntry.ConfigFile, json)
+    end)
+    
+    if success then
+        local hashSuccess, hash = pcall(function()
+            return HttpService:JSONEncode(configEntry.Config)
+        end)
+        if hashSuccess then
+            configEntry.LastSaveHash = hash
+        end
+    else
+        warn("[Haze Config] ⚠️ Failed to save config for " .. scriptName)
+        warn("[Haze Config] Error: " .. tostring(error))
+    end
+    
+    return success
+end
+
+function ConfigSystem.Update(scriptName, key, value)
+    local configEntry = ConfigSystem.Configs[scriptName]
+    if configEntry then
+        configEntry.Config[key] = value
+        return ConfigSystem.Save(scriptName)
+    else
+        warn("[Haze Config] No config found for " .. scriptName)
+        return false
+    end
+end
+
+function ConfigSystem.Get(scriptName)
+    local configEntry = ConfigSystem.Configs[scriptName]
+    return configEntry and configEntry.Config or nil
+end
+
+function ConfigSystem.GetValue(scriptName, key)
+    local config = ConfigSystem.Get(scriptName)
+    return config and config[key] or nil
+end
+
+-- Notification System
+function HazeHub.Notify(_, title, message, duration)
+    local from, to, time
+    
+    if duration then
+        from = title
+        to = message
+        time = duration
+    elseif type(message) ~= "number" then
+        if message then
+            from = title
+            to = message
+            time = 3
+        else
+            from = "haze.wtf"
+            to = title
+            time = 3
+        end
+    else
+        from = "haze.wtf"
+        to = title
+        time = message
+    end
+    
+    local mainUI = _G.HazeHubUI
+    if not mainUI then
+        mainUI = Instance.new("ScreenGui")
+        mainUI.Name = "HazeHubUI"
+        mainUI.ResetOnSpawn = false
+        mainUI.IgnoreGuiInset = true
+        mainUI.DisplayOrder = 10000
+        mainUI.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+        mainUI.Parent = RunService:IsStudio() and Players.LocalPlayer:WaitForChild("PlayerGui") or CoreGui
+        _G.HazeHubUI = mainUI
+    end
+    
+    local notificationsContainer = mainUI:FindFirstChild("Notifications")
+    if not notificationsContainer then
+        notificationsContainer = Instance.new("Frame")
+        notificationsContainer.Name = "Notifications"
+        notificationsContainer.Size = UDim2.new(0, 300, 1, -20)
+        notificationsContainer.Position = UDim2.new(0, 20, 0, 10)
+        notificationsContainer.BackgroundTransparency = 1
+        notificationsContainer.ZIndex = 10000
+        notificationsContainer.Parent = mainUI
+        
+        local layout = Instance.new("UIListLayout", notificationsContainer)
+        layout.SortOrder = Enum.SortOrder.LayoutOrder
+        layout.Padding = UDim.new(0, 10)
+        layout.VerticalAlignment = Enum.VerticalAlignment.Bottom
+    end
+    
+    local notification = Instance.new("Frame")
+    notification.Size = UDim2.new(1, 0, 0, 60)
+    notification.BackgroundColor3 = Theme.Main
+    notification.BackgroundTransparency = 0.1
+    notification.Parent = notificationsContainer
+    
+    UIUtils.CreateCorner(notification, 8)
+    UIUtils.CreateStroke(notification, Theme.Accent, 1)
+    
+    local icon = Instance.new("ImageLabel")
+    icon.Size = UDim2.new(0, 40, 0, 40)
+    icon.Position = UDim2.new(0, 5, 0, 10)
+    icon.BackgroundTransparency = 1
+    icon.Image = "rbxassetid://109706202148733"
+    icon.ScaleType = Enum.ScaleType.Fit
+    icon.Parent = notification
+    
+    local titleLabel = Instance.new("TextLabel")
+    titleLabel.Text = from
+    titleLabel.Font = Enum.Font.GothamBold
+    titleLabel.TextSize = 14
+    titleLabel.TextColor3 = Theme.Accent
+    titleLabel.Size = UDim2.new(1, -60, 0, 20)
+    titleLabel.Position = UDim2.new(0, 50, 0, 8)
+    titleLabel.TextXAlignment = Enum.TextXAlignment.Left
+    titleLabel.BackgroundTransparency = 1
+    titleLabel.Parent = notification
+    
+    local messageLabel = Instance.new("TextLabel")
+    messageLabel.Text = to
+    messageLabel.Font = Enum.Font.Gotham
+    messageLabel.TextSize = 12
+    messageLabel.TextColor3 = Theme.Text
+    messageLabel.Size = UDim2.new(1, -60, 0, 0)
+    messageLabel.Position = UDim2.new(0, 50, 0, 30)
+    messageLabel.TextXAlignment = Enum.TextXAlignment.Left
+    messageLabel.TextYAlignment = Enum.TextYAlignment.Top
+    messageLabel.TextWrapped = true
+    messageLabel.AutomaticSize = Enum.AutomaticSize.Y
+    messageLabel.BackgroundTransparency = 1
+    messageLabel.Parent = notification
+    
+    local textHeight = TextService:GetTextSize(to, 12, Enum.Font.Gotham, Vector2.new(notificationsContainer.AbsoluteSize.X - 60, 1000)).Y
+    notification.Size = UDim2.new(1, 0, 0, math.max(60, 40 + textHeight))
+    
+    -- Play notification sound
+    local sound = Instance.new("Sound")
+    sound.SoundId = "rbxassetid://117409737658405"
+    sound.Volume = 0.5
+    sound.Parent = game:GetService("SoundService")
+    sound:Play()
+    game:GetService("Debris"):AddItem(sound, 2)
+    
+    -- Animate notification
+    notification.Position = UDim2.new(-1.5, 0, 0, 0)
+    UIUtils.Tween(notification, TweenInfo.new(0.5, Enum.EasingStyle.Back), {
+        Position = UDim2.new(0, 0, 0, 0)
+    })
+    
+    -- Auto-remove
+    task.delay(time or 3, function()
+        UIUtils.Tween(notification, TweenInfo.new(0.5, Enum.EasingStyle.Back, Enum.EasingDirection.In), {
+            Position = UDim2.new(-1.5, 0, 0, 0)
+        })
+        task.wait(0.5)
+        notification:Destroy()
+    end)
+end
+
+-- Window Creation
+function HazeHub.CreateWindow(_, options)
+    options = options or {}
+    local window = {}
+    
+    -- Clean up existing UI
+    if _G.HazeHubUI then
+        _G.HazeHubUI:Destroy()
+    end
+    
+    -- Create main GUI
+    local mainUI = Instance.new("ScreenGui")
+    mainUI.Name = "HazeHubUI"
+    mainUI.ResetOnSpawn = false
+    mainUI.IgnoreGuiInset = true
+    mainUI.DisplayOrder = 10000
+    mainUI.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+    mainUI.Parent = RunService:IsStudio() and Players.LocalPlayer:WaitForChild("PlayerGui") or CoreGui
+    _G.HazeHubUI = mainUI
+    
+    -- Create notifications container
+    local notificationsContainer = Instance.new("Frame")
+    notificationsContainer.Name = "Notifications"
+    notificationsContainer.Size = UDim2.new(0, 300, 1, -20)
+    notificationsContainer.Position = UDim2.new(0, 20, 0, 10)
+    notificationsContainer.BackgroundTransparency = 1
+    notificationsContainer.ZIndex = 10000
+    notificationsContainer.Parent = mainUI
+    
+    local notificationsLayout = Instance.new("UIListLayout", notificationsContainer)
+    notificationsLayout.SortOrder = Enum.SortOrder.LayoutOrder
+    notificationsLayout.Padding = UDim.new(0, 10)
+    notificationsLayout.VerticalAlignment = Enum.VerticalAlignment.Bottom
+    
+    -- Window methods
+    function window.Notify(_, ...)
+        return HazeHub:Notify(...)
+    end
+    
+    function window.ConnectAccount(_, token)
+        local result = API.Connect(token)
+        if result.success then
+            window:Notify("Account", result.message or "Connected!", 3)
+        else
+            window:Notify("Error", result.error or "Failed to connect", 4)
+        end
+        return result
+    end
+    
+    -- Main window frame
+    local mainFrame = Instance.new("ImageButton")
+    mainFrame.Name = "Main"
+    mainFrame.Size = options.Size or UDim2.fromOffset(550, 350)
+    mainFrame.Position = UDim2.fromScale(0.5, 0.5)
+    mainFrame.AnchorPoint = Vector2.new(0.5, 0.5)
+    mainFrame.BackgroundColor3 = Theme.Main
+    mainFrame.BorderSizePixel = 0
+    mainFrame.ClipsDescendants = true
+    mainFrame.AutoButtonColor = false
+    mainFrame.Parent = mainUI
+    
+    UIUtils.CreateCorner(mainFrame, 16)
+    UIUtils.CreateDrag(mainFrame, mainFrame)
+    
+    -- Sidebar
+    local sidebar = Instance.new("Frame")
+    sidebar.Name = "Sidebar"
+    sidebar.Size = UDim2.new(0, 160, 1, 0)
+    sidebar.BackgroundColor3 = Theme.Main
+    sidebar.BackgroundTransparency = 1
+    sidebar.BorderSizePixel = 0
+    sidebar.Parent = mainFrame
+    
+    UIUtils.CreateDrag(mainFrame, sidebar)
+    
+    local sidebarPadding = Instance.new("UIPadding", sidebar)
+    sidebarPadding.PaddingLeft = UDim.new(0, 15)
+    sidebarPadding.PaddingRight = UDim.new(0, 15)
+    sidebarPadding.PaddingTop = UDim.new(0, 15)
+    sidebarPadding.PaddingBottom = UDim.new(0, 15)
+    
+    -- Content background
+    local contentBG = Instance.new("ImageButton")
+    contentBG.Name = "ContentBG"
+    contentBG.Size = UDim2.new(1, -170, 1, -20)
+    contentBG.Position = UDim2.new(0, 165, 0, 10)
+    contentBG.BackgroundColor3 = Theme.ContentBG
+    contentBG.BorderSizePixel = 0
+    contentBG.AutoButtonColor = false
+    contentBG.Parent = mainFrame
+    
+    UIUtils.CreateCorner(contentBG, 16)
+    UIUtils.CreateDrag(mainFrame, contentBG)
+    
+    -- Minimize button
+    local minimizeButton = Instance.new("ImageButton")
+    minimizeButton.Name = "OpenButton"
+    minimizeButton.Size = UDim2.new(0, 50, 0, 50)
+    minimizeButton.Position = UDim2.new(0.6, 0, 0.5, -25)
+    minimizeButton.BackgroundColor3 = Theme.Main
+    minimizeButton.Image = "rbxassetid://109706202148733"
+    minimizeButton.Visible = false
+    minimizeButton.ZIndex = 9000
+    minimizeButton.Parent = mainUI
+    
+    UIUtils.CreateCorner(minimizeButton, 16)
+    UIUtils.CreateStroke(minimizeButton, Color3.fromRGB(60, 120, 255), 2)
+    UIUtils.CreateDrag(minimizeButton, minimizeButton)
+    
+    local function ToggleUI()
+        mainFrame.Visible = not mainFrame.Visible
+        minimizeButton.Visible = not mainFrame.Visible
+    end
+    
+    minimizeButton.MouseButton1Click:Connect(ToggleUI)
+    
+    -- Toggle with Insert key
+    UserInputService.InputBegan:Connect(function(input, processed)
+        if not processed and input.KeyCode == Enum.KeyCode.Insert then
+            ToggleUI()
+        end
+    end)
+    
+    -- Logo area
+    local logoArea = Instance.new("Frame")
+    logoArea.Name = "LogoArea"
+    logoArea.Size = UDim2.new(1, 0, 0, 50)
+    logoArea.BackgroundTransparency = 1
+    logoArea.Parent = sidebar
+    
+    local logoIcon = Instance.new("ImageLabel")
+    logoIcon.Size = UDim2.new(0, 45, 0, 45)
+    logoIcon.Position = UDim2.new(0, -5, 0.5, -20)
+    logoIcon.BackgroundTransparency = 1
+    logoIcon.Image = "rbxassetid://109706202148733"
+    logoIcon.ScaleType = Enum.ScaleType.Fit
+    logoIcon.Parent = logoArea
+    
+    local logoText = Instance.new("TextLabel")
+    logoText.Text = "Haze Hub"
+    logoText.Font = Enum.Font.GothamBold
+    logoText.TextSize = 16
+    logoText.TextColor3 = Theme.Text
+    logoText.TextXAlignment = Enum.TextXAlignment.Left
+    logoText.Size = UDim2.new(1, -40, 1, 0)
+    logoText.Position = UDim2.new(0, 40, 0, -5)
+    logoText.BackgroundTransparency = 1
+    logoText.Parent = logoArea
+    
+    local discordText = Instance.new("TextLabel")
+    discordText.Text = "discord.gg/hazewtf"
+    discordText.Font = Enum.Font.Gotham
+    discordText.TextSize = 11
+    discordText.TextColor3 = Theme.TextDim
+    discordText.TextXAlignment = Enum.TextXAlignment.Left
+    discordText.Size = UDim2.new(1, -40, 1, 0)
+    discordText.Position = UDim2.new(0, 40, 0, 10)
+    discordText.BackgroundTransparency = 1
+    discordText.Parent = logoArea
+    
+    -- Profile area
+    local profileArea = Instance.new("Frame")
+    profileArea.Name = "Profile"
+    profileArea.Size = UDim2.new(1, 0, 0, 45)
+    profileArea.Position = UDim2.new(0, 0, 1, -45)
+    profileArea.BackgroundTransparency = 1
+    profileArea.Parent = sidebar
+    
+    local profilePicture = Instance.new("ImageLabel")
+    profilePicture.Size = UDim2.new(0, 32, 0, 32)
+    profilePicture.Position = UDim2.new(0, 0, 0.55, -14)
+    profilePicture.BackgroundColor3 = Theme.ElementBG
+    profilePicture.Image = "rbxassetid://0"
+    profilePicture.Parent = profileArea
+    
+    UIUtils.CreateCorner(profilePicture, 16)
+    
+    -- Load player avatar
+    task.spawn(function()
+        local thumbType = Enum.ThumbnailType.HeadShot
+        local thumbSize = Enum.ThumbnailSize.Size420x420
+        local success, image, isReady = pcall(function()
+            return Players:GetUserThumbnailAsync(Players.LocalPlayer.UserId, thumbType, thumbSize)
+        end)
+        
+        if success and isReady then
+            profilePicture.Image = image
+        end
+    end)
+    
+    local displayName = Instance.new("TextLabel")
+    displayName.Text = Players.LocalPlayer.DisplayName
+    displayName.Font = Enum.Font.GothamBold
+    displayName.TextSize = 12
+    displayName.TextColor3 = Theme.Text
+    displayName.TextXAlignment = Enum.TextXAlignment.Left
+    displayName.Size = UDim2.new(1, -40, 0, 16)
+    displayName.Position = UDim2.new(0, 40, 0.5, -9)
+    displayName.BackgroundTransparency = 1
+    displayName.Parent = profileArea
+    
+    local username = Instance.new("TextLabel")
+    username.Text = "@" .. Players.LocalPlayer.Name
+    username.Font = Enum.Font.Gotham
+    username.TextSize = 11
+    username.TextColor3 = Theme.TextDim
+    username.TextXAlignment = Enum.TextXAlignment.Left
+    username.Size = UDim2.new(1, -40, 0, 16)
+    username.Position = UDim2.new(0, 40, 0.5, 3)
+    username.BackgroundTransparency = 1
+    username.Parent = profileArea
+    
+    -- Tab list
+    local tabList = Instance.new("ScrollingFrame")
+    tabList.Name = "TabList"
+    tabList.Size = UDim2.new(1, 0, 1, -105)
+    tabList.Position = UDim2.new(0, 0, 0, 60)
+    tabList.BackgroundTransparency = 1
+    tabList.ScrollBarThickness = 1
+    tabList.ScrollBarImageColor3 = Theme.Accent
+    tabList.CanvasSize = UDim2.new(0, 0, 0, 0)
+    tabList.ZIndex = 5
+    tabList.Parent = sidebar
+    
+    local tabLayout = Instance.new("UIListLayout", tabList)
+    tabLayout.SortOrder = Enum.SortOrder.LayoutOrder
+    tabLayout.Padding = UDim.new(0, 5)
+    
+    tabLayout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
+        tabList.CanvasSize = UDim2.new(0, 0, 0, tabLayout.AbsoluteContentSize.Y + 10)
+    end)
+    
+    -- Header with close button
+    local header = Instance.new("Frame")
+    header.Name = "Header"
+    header.Size = UDim2.new(1, 0, 0, 30)
+    header.BackgroundTransparency = 1
+    header.ZIndex = 2
+    header.Parent = contentBG
+    
+    UIUtils.CreateDrag(mainFrame, header)
+    
+    local closeButtonArea = Instance.new("Frame")
+    closeButtonArea.Size = UDim2.new(0, 40, 1, 0)
+    closeButtonArea.Position = UDim2.new(1, -40, 0, 0)
+    closeButtonArea.BackgroundTransparency = 1
+    closeButtonArea.Parent = header
+    
+    local closeButton = Instance.new("TextButton")
+    closeButton.Text = "−"
+    closeButton.Font = Enum.Font.GothamBold
+    closeButton.TextSize = 18
+    closeButton.TextColor3 = Theme.TextDim
+    closeButton.Size = UDim2.new(1, 0, 1, 0)
+    closeButton.BackgroundTransparency = 1
+    closeButton.Parent = closeButtonArea
+    closeButton.MouseButton1Click:Connect(ToggleUI)
+    
+    -- Pages container
+    local pagesContainer = Instance.new("Frame")
+    pagesContainer.Name = "Pages"
+    pagesContainer.Size = UDim2.new(1, 0, 1, -15)
+    pagesContainer.Position = UDim2.new(0, 0, 0, 10)
+    pagesContainer.BackgroundTransparency = 1
+    pagesContainer.Parent = contentBG
+    
+    -- Tabs management
+    local tabs = {}
+    local activeTab = nil
+    
+    function window.AddTab(_, tabName, tabIcon)
+        local tab = {
+            Name = tabName
+        }
+        
+        local tabButton = Instance.new("TextButton")
+        tab.Btn = tabButton
+        tabButton.Name = tabName
+        tabButton.Size = UDim2.new(1, 0, 0, 36)
+        tabButton.BackgroundTransparency = 1
+        tabButton.BackgroundColor3 = Theme.Selected
+        tabButton.Text = ""
+        tabButton.AutoButtonColor = false
+        tabButton.Parent = tabList
+        
+        UIUtils.CreateCorner(tabButton, 8)
+        
+        local tabTitle = Instance.new("TextLabel")
+        tabTitle.Text = tabName
+        tabTitle.Font = Enum.Font.GothamMedium
+        tabTitle.TextSize = 13
+        tabTitle.TextColor3 = Theme.TextDim
+        tabTitle.Size = UDim2.new(1, -40, 1, 0)
+        tabTitle.Position = UDim2.new(0, 40, 0, 0)
+        tabTitle.TextXAlignment = Enum.TextXAlignment.Left
+        tabTitle.BackgroundTransparency = 1
+        tabTitle.Parent = tabButton
+        
+        local tabIconLabel = Instance.new("ImageLabel")
+        tabIconLabel.Size = UDim2.new(0, 18, 0, 18)
+        tabIconLabel.Position = UDim2.new(0, 12, 0.5, -9)
+        tabIconLabel.BackgroundTransparency = 1
+        tabIconLabel.Image = tabIcon or Icons.Home
+        tabIconLabel.ImageColor3 = Theme.TextDim
+        tabIconLabel.ScaleType = Enum.ScaleType.Fit
+        tabIconLabel.Parent = tabButton
+        
+        -- Tab page
+        local tabPage = Instance.new("ScrollingFrame")
+        tabPage.Name = tabName .. "_Page"
+        tabPage.Size = UDim2.new(1, 0, 1, 0)
+        tabPage.BackgroundTransparency = 1
+        tabPage.ScrollBarThickness = 0
+        tabPage.ScrollBarImageColor3 = Theme.Accent
+        tabPage.Visible = false
+        tabPage.CanvasSize = UDim2.new(0, 0, 0, 0)
+        tabPage.Parent = pagesContainer
+        
+        local pagePadding = Instance.new("UIPadding", tabPage)
+        pagePadding.PaddingLeft = UDim.new(0, 20)
+        pagePadding.PaddingRight = UDim.new(0, 40)
+        pagePadding.PaddingBottom = UDim.new(0, 20)
+        
+        local pageLayout = Instance.new("UIListLayout", tabPage)
+        pageLayout.SortOrder = Enum.SortOrder.LayoutOrder
+        pageLayout.Padding = UDim.new(0, 15)
+        
+        pageLayout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
+            tabPage.CanvasSize = UDim2.new(0, 0, 0, pageLayout.AbsoluteContentSize.Y + 40)
+        end)
+        
+        local function ActivateTab()
+            if activeTab then
+                UIUtils.Tween(activeTab.Btn, TweenInfo.new(0.2), {
+                    BackgroundTransparency = 1
+                })
+                UIUtils.Tween(activeTab.BtnTitle, TweenInfo.new(0.2), {
+                    TextColor3 = Theme.TextDim
+                })
+                UIUtils.Tween(activeTab.BtnIcon, TweenInfo.new(0.2), {
+                    ImageColor3 = Theme.TextDim
+                })
+                activeTab.Page.Visible = false
+            end
+            
+            activeTab = {
+                Btn = tabButton,
+                BtnTitle = tabTitle,
+                BtnIcon = tabIconLabel,
+                Page = tabPage
+            }
+            
+            UIUtils.Tween(tabButton, TweenInfo.new(0.2), {
+                BackgroundTransparency = 0
+            })
+            UIUtils.Tween(tabTitle, TweenInfo.new(0.2), {
+                TextColor3 = Theme.Text
+            })
+            UIUtils.Tween(tabIconLabel, TweenInfo.new(0.2), {
+                ImageColor3 = Theme.Text
+            })
+            
+            tabPage.Visible = true
+        end
+        
+        tab.Activate = ActivateTab
+        tabButton.MouseButton1Click:Connect(ActivateTab)
+        table.insert(tabs, tab)
+        
+        function tab.AddSection(_, sectionName)
+            local section = Instance.new("Frame")
+            section.Name = "Section_" .. sectionName
+            section.Size = UDim2.new(1, 0, 0, 0)
+            section.BackgroundTransparency = 1
+            section.AutomaticSize = Enum.AutomaticSize.Y
+            section.Parent = tabPage
+            
+            local sectionLayout = Instance.new("UIListLayout", section)
+            sectionLayout.SortOrder = Enum.SortOrder.LayoutOrder
+            sectionLayout.Padding = UDim.new(0, 5)
+            
+            local sectionTitle = Instance.new("TextLabel")
+            sectionTitle.Text = sectionName
+            sectionTitle.Font = Enum.Font.GothamBold
+            sectionTitle.TextSize = 12
+            sectionTitle.TextColor3 = Theme.TextDim
+            sectionTitle.Size = UDim2.new(1, 0, 0, 20)
+            sectionTitle.TextXAlignment = Enum.TextXAlignment.Left
+            sectionTitle.TextYAlignment = Enum.TextYAlignment.Bottom
+            sectionTitle.BackgroundTransparency = 1
+            sectionTitle.LayoutOrder = 0
+            sectionTitle.Parent = section
+            
+            local elementsContainer = Instance.new("Frame")
+            elementsContainer.BackgroundColor3 = Theme.ElementBG
+            elementsContainer.BackgroundTransparency = 0.5
+            elementsContainer.LayoutOrder = 2
+            elementsContainer.Parent = section
+            
+            UIUtils.CreateCorner(elementsContainer, 10)
+            
+            local elementsLayout = Instance.new("UIListLayout", elementsContainer)
+            elementsLayout.SortOrder = Enum.SortOrder.LayoutOrder
+            elementsLayout.Padding = UDim.new(0, 1)
+            
+            elementsLayout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
+                elementsContainer.Size = UDim2.new(1, 0, 0, elementsLayout.AbsoluteContentSize.Y)
+            end)
+            
+            return {
+                SetDescription = function(_, description)
+                    local descLabel = Instance.new("TextLabel")
+                    descLabel.Text = description
+                    descLabel.Font = Enum.Font.Gotham
+                    descLabel.TextSize = 11
+                    descLabel.TextColor3 = Theme.TextDim
+                    descLabel.Size = UDim2.new(1, 0, 0, 0)
+                    descLabel.TextXAlignment = Enum.TextXAlignment.Left
+                    descLabel.TextWrapped = true
+                    descLabel.AutomaticSize = Enum.AutomaticSize.Y
+                    descLabel.BackgroundTransparency = 1
+                    descLabel.LayoutOrder = 1
+                    descLabel.Parent = section
+                    
+                    Instance.new("UIPadding", descLabel).PaddingBottom = UDim.new(0, 5)
+                end,
+                
+                AddButton = function(_, buttonName, callback)
+                    local button = Instance.new("TextButton")
+                    button.Size = UDim2.new(1, 0, 0, 40)
+                    button.BackgroundTransparency = 1
+                    button.BackgroundColor3 = Theme.Selected
+                    button.Text = ""
+                    button.AutoButtonColor = false
+                    button.Parent = elementsContainer
+                    
+                    local buttonLabel = Instance.new("TextLabel")
+                    buttonLabel.Text = buttonName
+                    buttonLabel.Font = Enum.Font.GothamMedium
+                    buttonLabel.TextSize = 13
+                    buttonLabel.TextColor3 = Theme.Text
+                    buttonLabel.Size = UDim2.new(1, -40, 1, 0)
+                    buttonLabel.Position = UDim2.new(0, 15, 0, 0)
+                    buttonLabel.TextXAlignment = Enum.TextXAlignment.Left
+                    buttonLabel.BackgroundTransparency = 1
+                    buttonLabel.Parent = button
+                    
+                    local mouseIcon = Instance.new("ImageLabel")
+                    mouseIcon.Size = UDim2.new(0, 24, 0, 24)
+                    mouseIcon.Position = UDim2.new(1, -34, 0.5, -12)
+                    mouseIcon.BackgroundTransparency = 1
+                    mouseIcon.Image = Icons.Mouse
+                    mouseIcon.ImageColor3 = Theme.TextDim
+                    mouseIcon.ScaleType = Enum.ScaleType.Fit
+                    mouseIcon.Parent = button
+                    
+                    -- Hover effects
+                    button.MouseEnter:Connect(function()
+                        UIUtils.Tween(button, TweenInfo.new(0.2), {
+                            BackgroundTransparency = 0.9
+                        })
+                    end)
+                    
+                    button.MouseLeave:Connect(function()
+                        UIUtils.Tween(button, TweenInfo.new(0.2), {
+                            BackgroundTransparency = 1
+                        })
+                    end)
+                    
+                    button.MouseButton1Click:Connect(function()
+                        pcall(callback)
+                    end)
+                end,
+                
+                AddToggle = function(_, toggleName, defaultValue, callback)
+                    local value = defaultValue or false
+                    
+                    local toggle = Instance.new("TextButton")
+                    toggle.Size = UDim2.new(1, 0, 0, 40)
+                    toggle.BackgroundTransparency = 1
+                    toggle.BackgroundColor3 = Theme.Selected
+                    toggle.Text = ""
+                    toggle.AutoButtonColor = false
+                    toggle.Parent = elementsContainer
+                    
+                    local toggleLabel = Instance.new("TextLabel")
+                    toggleLabel.Text = toggleName
+                    toggleLabel.Font = Enum.Font.GothamMedium
+                    toggleLabel.TextSize = 13
+                    toggleLabel.TextColor3 = Theme.Text
+                    toggleLabel.Size = UDim2.new(1, -60, 1, 0)
+                    toggleLabel.Position = UDim2.new(0, 15, 0, 0)
+                    toggleLabel.TextXAlignment = Enum.TextXAlignment.Left
+                    toggleLabel.BackgroundTransparency = 1
+                    toggleLabel.Parent = toggle
+                    
+                    local toggleBackground = Instance.new("Frame")
+                    toggleBackground.Size = UDim2.new(0, 40, 0, 20)
+                    toggleBackground.Position = UDim2.new(1, -50, 0.5, -10)
+                    toggleBackground.BackgroundColor3 = Theme.Main
+                    toggleBackground.BorderSizePixel = 0
+                    toggleBackground.Parent = toggle
+                    
+                    UIUtils.CreateCorner(toggleBackground, 20)
+                    
+                    local toggleSlider = Instance.new("Frame")
+                    toggleSlider.Size = UDim2.new(0, 16, 0, 16)
+                    toggleSlider.Position = UDim2.new(0, 2, 0.5, -8)
+                    toggleSlider.BorderSizePixel = 0
+                    toggleSlider.Parent = toggleBackground
+                    
+                    UIUtils.CreateCorner(toggleSlider, 16)
+                    
+                    local function UpdateToggle()
+                        if value then
+                            UIUtils.Tween(toggleSlider, TweenInfo.new(0.2), {
+                                Position = UDim2.new(1, -18, 0.5, -8),
+                                BackgroundColor3 = Color3.fromRGB(60, 255, 60)
+                            })
+                        else
+                            UIUtils.Tween(toggleSlider, TweenInfo.new(0.2), {
+                                Position = UDim2.new(0, 2, 0.5, -8),
+                                BackgroundColor3 = Color3.fromRGB(255, 60, 60)
+                            })
+                        end
+                        pcall(callback, value)
+                    end
+                    
+                    toggle.MouseButton1Click:Connect(function()
+                        value = not value
+                        UpdateToggle()
+                    end)
+                    
+                    -- Set initial state
+                    if value then
+                        toggleSlider.Position = UDim2.new(1, -18, 0.5, -8)
+                        toggleSlider.BackgroundColor3 = Color3.fromRGB(60, 255, 60)
+                    else
+                        toggleSlider.Position = UDim2.new(0, 2, 0.5, -8)
+                        toggleSlider.BackgroundColor3 = Color3.fromRGB(255, 60, 60)
+                    end
+                    
+                    pcall(callback, value)
+                    
+                    return {
+                        Set = function(_, newValue)
+                            if value ~= newValue then
+                                value = newValue
+                                UpdateToggle()
+                            end
+                        end
+                    }
+                end,
+                
+                AddCheckmark = function(_, checkName, defaultValue, callback)
+                    local value = defaultValue or false
+                    
+                    local check = Instance.new("TextButton")
+                    check.Size = UDim2.new(1, 0, 0, 40)
+                    check.BackgroundTransparency = 1
+                    check.BackgroundColor3 = Theme.Selected
+                    check.Text = ""
+                    check.AutoButtonColor = false
+                    check.Parent = elementsContainer
+                    
+                    local checkLabel = Instance.new("TextLabel")
+                    checkLabel.Text = checkName
+                    checkLabel.Font = Enum.Font.GothamMedium
+                    checkLabel.TextSize = 13
+                    checkLabel.TextColor3 = Theme.Text
+                    checkLabel.Size = UDim2.new(1, -40, 1, 0)
+                    checkLabel.Position = UDim2.new(0, 15, 0, 0)
+                    checkLabel.TextXAlignment = Enum.TextXAlignment.Left
+                    checkLabel.BackgroundTransparency = 1
+                    checkLabel.Parent = check
+                    
+                    local checkIcon = Instance.new("ImageLabel")
+                    checkIcon.Size = UDim2.new(0, 16, 0, 16)
+                    checkIcon.Position = UDim2.new(1, -30, 0.5, -8)
+                    checkIcon.BackgroundTransparency = 1
+                    checkIcon.Image = Icons.Check
+                    checkIcon.ImageColor3 = Theme.TextDim
+                    checkIcon.ScaleType = Enum.ScaleType.Fit
+                    checkIcon.Parent = check
+                    
+                    local function UpdateCheckmark(skipCallback)
+                        if value then
+                            checkIcon.ImageColor3 = Color3.fromRGB(60, 255, 60)
+                        else
+                            checkIcon.ImageColor3 = Theme.TextDim
+                        end
+                        
+                        if not skipCallback then
+                            pcall(callback, value)
+                        end
+                    end
+                    
+                    check.MouseButton1Click:Connect(function()
+                        value = not value
+                        UpdateCheckmark()
+                    end)
+                    
+                    UpdateCheckmark(true)
+                    
+                    return {
+                        Set = function(_, newValue)
+                            value = newValue
+                            UpdateCheckmark()
+                        end
+                    }
+                end,
+                
+                AddSlider = function(_, sliderName, minValue, maxValue, defaultValue, callback)
+                    local value = defaultValue or minValue
+                    
+                    local slider = Instance.new("Frame")
+                    slider.Size = UDim2.new(1, 0, 0, 50)
+                    slider.BackgroundTransparency = 1
+                    slider.Parent = elementsContainer
+                    
+                    local sliderLabel = Instance.new("TextLabel")
+                    sliderLabel.Text = sliderName
+                    sliderLabel.Font = Enum.Font.GothamMedium
+                    sliderLabel.TextSize = 13
+                    sliderLabel.TextColor3 = Theme.Text
+                    sliderLabel.Size = UDim2.new(1, -80, 0, 20)
+                    sliderLabel.Position = UDim2.new(0, 15, 0, 8)
+                    sliderLabel.TextXAlignment = Enum.TextXAlignment.Left
+                    sliderLabel.BackgroundTransparency = 1
+                    sliderLabel.Parent = slider
+                    
+                    local valueBox = Instance.new("TextBox")
+                    valueBox.Text = tostring(value)
+                    valueBox.Font = Enum.Font.GothamBold
+                    valueBox.TextSize = 12
+                    valueBox.TextColor3 = Theme.TextDim
+                    valueBox.Size = UDim2.new(0, 60, 0, 20)
+                    valueBox.Position = UDim2.new(1, -75, 0, 8)
+                    valueBox.TextXAlignment = Enum.TextXAlignment.Right
+                    valueBox.BackgroundTransparency = 1
+                    valueBox.Parent = slider
+                    
+                    local sliderTrack = Instance.new("TextButton")
+                    sliderTrack.Text = ""
+                    sliderTrack.AutoButtonColor = false
+                    sliderTrack.Size = UDim2.new(1, -30, 0, 20)
+                    sliderTrack.Position = UDim2.new(0, 15, 0, 27)
+                    sliderTrack.BackgroundTransparency = 1
+                    sliderTrack.Parent = slider
+                    
+                    local trackBackground = Instance.new("Frame")
+                    trackBackground.Name = "Track"
+                    trackBackground.Size = UDim2.new(1, 0, 0, 4)
+                    trackBackground.Position = UDim2.new(0, 0, 0.5, -2)
+                    trackBackground.BackgroundColor3 = Theme.Main
+                    trackBackground.BorderSizePixel = 0
+                    trackBackground.Parent = sliderTrack
+                    
+                    UIUtils.CreateCorner(trackBackground, 2)
+                    
+                    local trackFill = Instance.new("Frame")
+                    trackFill.Size = UDim2.new(0, 0, 1, 0)
+                    trackFill.BackgroundColor3 = Theme.Accent
+                    trackFill.Parent = trackBackground
+                    
+                    UIUtils.CreateCorner(trackFill, 2)
+                    
+                    local function FormatValue(val)
+                        if val >= 1000000000000 then
+                            return string.format("%.1fT", val / 1000000000000)
+                        elseif val >= 1000000000 then
+                            return string.format("%.1fB", val / 1000000000)
+                        elseif val >= 1000000 then
+                            return string.format("%.1fM", val / 1000000)
+                        elseif val >= 1000 then
+                            return string.format("%.1fK", val / 1000)
+                        else
+                            return tostring(val)
+                        end
+                    end
+                    
+                    local function ParseInput(input)
+                        local lower = input:lower()
+                        local number = tonumber(lower:match("[%d%.]+"))
+                        
+                        if not number then
+                            return nil
+                        end
+                        
+                        if lower:find("k") then
+                            number = number * 1000
+                        end
+                        if lower:find("m") then
+                            number = number * 1000000
+                        end
+                        if lower:find("b") then
+                            number = number * 1000000000
+                        end
+                        if lower:find("t") then
+                            number = number * 1000000000000
+                        end
+                        
+                        return math.floor(number)
+                    end
+                    
+                    local function UpdateSlider(input, isFinal)
+                        local percent = math.clamp((input.Position.X - sliderTrack.AbsolutePosition.X) / sliderTrack.AbsoluteSize.X, 0, 1)
+                        value = math.floor(minValue + (maxValue - minValue) * percent)
+                        valueBox.Text = FormatValue(value)
+                        trackFill.Size = UDim2.new(percent, 0, 1, 0)
+                        pcall(callback, value, isFinal)
+                    end
+                    
+                    local dragging = false
+                    sliderTrack.ZIndex = 5
+                    
+                    sliderTrack.InputBegan:Connect(function(input)
+                        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+                            dragging = true
+                            UpdateSlider(input, true)
+                        end
+                    end)
+                    
+                    UserInputService.InputChanged:Connect(function(input)
+                        if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+                            UpdateSlider(input, false)
+                        end
+                    end)
+                    
+                    UserInputService.InputEnded:Connect(function(input)
+                        if (input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch) and dragging then
+                            dragging = false
+                            UpdateSlider(input, true)
+                        end
+                    end)
+                    
+                    valueBox.FocusLost:Connect(function()
+                        local parsed = ParseInput(valueBox.Text)
+                        if parsed then
+                            value = math.clamp(parsed, minValue, maxValue)
+                            valueBox.Text = FormatValue(value)
+                            local percent = (value - minValue) / (maxValue - minValue)
+                            trackFill.Size = UDim2.new(percent, 0, 1, 0)
+                            pcall(callback, value, true)
+                        else
+                            valueBox.Text = FormatValue(value)
+                        end
+                    end)
+                    
+                    -- Set initial position
+                    local initialPercent = (value - minValue) / (maxValue - minValue)
+                    trackFill.Size = UDim2.new(initialPercent, 0, 1, 0)
+                    valueBox.Text = FormatValue(value)
+                    
+                    return {
+                        Set = function(_, newValue, newMin, newMax)
+                            if newMin then
+                                minValue = newMin
+                            end
+                            if newMax then
+                                maxValue = newMax
+                            end
+                            
+                            local finalValue = newValue or value
+                            value = math.clamp(finalValue, minValue, maxValue)
+                            valueBox.Text = FormatValue(value)
+                            
+                            local range = maxValue - minValue
+                            local percent = range == 0 and 0 or (value - minValue) / range
+                            trackFill.Size = UDim2.new(percent, 0, 1, 0)
+                        end,
+                        Destroy = function()
+                            slider:Destroy()
+                        end
+                    }
+                end,
+                
+                AddTextBox = function(_, boxName, placeholder, callback)
+                    local textBoxContainer = Instance.new("Frame")
+                    textBoxContainer.Size = UDim2.new(1, 0, 0, 40)
+                    textBoxContainer.BackgroundTransparency = 1
+                    textBoxContainer.Parent = elementsContainer
+                    
+                    local boxLabel = Instance.new("TextLabel")
+                    boxLabel.Text = boxName
+                    boxLabel.Font = Enum.Font.GothamMedium
+                    boxLabel.TextSize = 13
+                    boxLabel.TextColor3 = Theme.Text
+                    boxLabel.Size = UDim2.new(0, 100, 1, 0)
+                    boxLabel.Position = UDim2.new(0, 15, 0, 0)
+                    boxLabel.TextXAlignment = Enum.TextXAlignment.Left
+                    boxLabel.BackgroundTransparency = 1
+                    boxLabel.Parent = textBoxContainer
+                    
+                    local textBox = Instance.new("TextBox")
+                    textBox.Text = ""
+                    textBox.PlaceholderText = placeholder or "..."
+                    textBox.PlaceholderColor3 = Theme.TextDim
+                    textBox.TextColor3 = Theme.Text
+                    textBox.Font = Enum.Font.Gotham
+                    textBox.TextSize = 13
+                    textBox.Size = UDim2.new(0.5, 0, 0.7, 0)
+                    textBox.Position = UDim2.new(1, -15, 0.5, 0)
+                    textBox.AnchorPoint = Vector2.new(1, 0.5)
+                    textBox.BackgroundColor3 = Theme.Main
+                    textBox.TextXAlignment = Enum.TextXAlignment.Center
+                    textBox.Parent = textBoxContainer
+                    
+                    UIUtils.CreateCorner(textBox, 6)
+                    
+                    textBox.FocusLost:Connect(function()
+                        pcall(callback, textBox.Text)
+                    end)
+                end
+            }
+        end
+        
+        -- Settings tab special handling
+        if tabName == "Settings" then
+            tabIconLabel.Image = Icons.Settings
+            
+            local infoSection = tab:AddSection("Information")
+            infoSection:SetDescription("Press [INSERT] to minimize/maximize the UI.\nAuto Rejoin: Automatically reconnects if you get disconnected (Error 277/268/etc).")
+            
+            local accountSection = tab:AddSection("Account Connection")
+            accountSection:SetDescription("Connect your Haze account to track stats.\nHead over to haze.wtf to get your connection token.")
+            
+            local connectionToken = ""
+            accountSection:AddTextBox("Connection Token", "Enter Token...", function(token)
+                connectionToken = token
+            end)
+            
+            accountSection:AddButton("Connect Account", function()
+                window:ConnectAccount(connectionToken)
+            end)
+            
+            local discordSection = tab:AddSection("Discord")
+            discordSection:SetDescription("Join our Discord server to stay updated!")
+            
+            discordSection:AddButton("Join Discord", function()
+                local inviteLink = "https://discord.gg/M23DKmm7Yg"
+                
+                if setclipboard then
+                    setclipboard(inviteLink)
+                    window:Notify("Discord", "Invite link copied to clipboard!", 7)
+                end
+                
+                -- Try to open Discord
+                task.spawn(function()
+                    local request = syn and syn.request or (http and http.request or httpRequest)
+                    if request then
+                        pcall(function()
+                            request({
+                                Url = "http://127.0.0.1:6463/rpc?v=1",
+                                Method = "POST",
+                                Headers = {
+                                    ["Content-Type"] = "application/json",
+                                    Origin = "https://discord.com"
+                                },
+                                Body = HttpService:JSONEncode({
+                                    cmd = "INVITE_BROWSER",
+                                    args = {code = "M23DKmm7Yg"},
+                                    nonce = HttpService:GenerateGUID(false)
+                                })
+                            })
+                        end)
+                    end
+                end)
+            end)
+        end
+        
+        return tab
+    end
+    
+    -- Add default Settings tab
+    window:AddTab("Settings", Icons.Settings)
+    
+    -- Move Settings to bottom
+    local settingsTab = tabList:FindFirstChild("Settings")
+    if settingsTab then
+        settingsTab.LayoutOrder = 999999
+    end
+    
+    -- Activate first tab
+    if #tabs > 0 and tabs[1].Activate then
+        tabs[1].Activate()
+    end
+    
+    return window
+end
+
+-- Set game data callback
+function HazeHub.SetGameDataCallback(callback)
+    if type(callback) == "function" then
+        Session.GameDataCallback = callback
+        return true
+    else
+        warn("[Haze] Game data callback must be a function")
+        return false
+    end
+end
+
+-- Configuration system wrappers
+function HazeHub.InitializeConfig(scriptName, defaultConfig)
+    return ConfigSystem.Initialize(scriptName, defaultConfig)
+end
+
+function HazeHub.SaveConfig(scriptName)
+    return ConfigSystem.Save(scriptName)
+end
+
+function HazeHub.UpdateConfig(scriptName, key, value)
+    return ConfigSystem.Update(scriptName, key, value)
+end
+
+function HazeHub.GetConfig(scriptName)
+    return ConfigSystem.Get(scriptName)
+end
+
+function HazeHub.GetConfigValue(scriptName, key)
+    return ConfigSystem.GetValue(scriptName, key)
+end
+
+-- Get session status
+function HazeHub.GetStatus()
+    return {
+        verified = Session.Verified,
+        hwid = Session.HWID,
+        expiresAt = Session.ExpiresAt,
+        timeRemaining = math.max(0, (Session.ExpiresAt or 0) - os.time()),
+        lastHeartbeat = Session.LastHeartbeat,
+        heartbeatFailures = Session.HeartbeatFailures,
+        maxFailures = Session.MaxFailures
+    }
+end
+
+-- Main entry point
+function HazeHub.new(name, _, _)
+    local window = HazeHub:CreateWindow({
+        Name = name
+    })
+    
+    HazeHub:Notify("Don't forget to join our Discord server for the updates! discord.gg/hazewtf", 10)
+    
+    -- Try to open Discord
+    task.spawn(function()
+        local request = syn and syn.request or (http and http.request or httpRequest)
+        if request and identifyExecutor() ~= "Wave" then
+            pcall(function()
+                request({
+                    Url = "http://127.0.0.1:6463/rpc?v=1",
+                    Method = "POST",
+                    Headers = {
+                        ["Content-Type"] = "application/json",
+                        Origin = "https://discord.com"
+                    },
+                    Body = HttpService:JSONEncode({
+                        cmd = "INVITE_BROWSER",
+                        args = {code = "M23DKmm7Yg"},
+                        nonce = HttpService:GenerateGUID(false)
+                    })
+                })
+            end)
+        end
+    end)
+    
+    return window
+end
+
+-- Auto-rejoin system
+task.spawn(function()
+    repeat
+        task.wait()
+    until CoreGui:FindFirstChild("RobloxPromptGui")
+    
+    CoreGui.RobloxPromptGui:WaitForChild("promptOverlay").ChildAdded:Connect(function(child)
+        if child.Name ~= "ErrorPrompt" then
+            return
+        end
+        
+        -- Auto-rejoin on error
+        while true do
+            TeleportService:Teleport(game.PlaceId)
+            task.wait(2)
+        end
+    end)
+end)
+
+-- Anti-idle
+local VirtualUser = game:GetService("VirtualUser")
+Players.LocalPlayer.Idled:Connect(function()
+    VirtualUser:CaptureController()
+    VirtualUser:ClickButton2(Vector2.new())
+end)
+
+_G.HazePrivate = true
+return HazeHub
